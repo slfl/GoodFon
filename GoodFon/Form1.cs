@@ -10,8 +10,7 @@ using System.Windows.Forms;
 using HtmlAgilityPack;
 using System.IO;
 using System.Net;
-
-
+using System.Threading;
 
 
 namespace WindowsFormsApplication1
@@ -22,44 +21,44 @@ namespace WindowsFormsApplication1
         {
             InitializeComponent();
         }
-
         private void Form1_Load(object sender, EventArgs e)
         {
 
-        }
-
+        } //Форма
         private void textBox1_TextChanged(object sender, EventArgs e) //Ссылка на страницу
         {
 
         }
-
         private void textBox2_TextChanged(object sender, EventArgs e) //Кол-во страниц
         {
 
         }
-
         private void button1_Click(object sender, EventArgs e) //Кнопка выхода
         {
             this.Close();
         }
-
         private void button2_Click(object sender, EventArgs e) //Кнопка инфы
         {
             MessageBox.Show("Программу написал Mansi");
             MessageBox.Show("За скрипты спасибо Руслану Слинкову");
         }
-
         private void button3_Click(object sender, EventArgs e) //Кнопка старта
         {
-            List<string> images = ParseLinks(textBox1.Text, Convert.ToInt32(textBox1.Text));
+            List<string> images = ParseLinks(textBox1.Text, Convert.ToInt32(textBox2.Text));
             foreach (string a in images)
             {
-                //MessageBox.Show("Ну что, программа начала работать!");
+                MessageBox.Show("Ну что, программа начала работать!");
                 DownloadImage(GetImage(a));
+                newThread.Start();
             }
         }
+        private void button4_Click(object sender, EventArgs e) //Кнопка остановки
+        {
+            newThread.Abort();
+        }
 
-        // А эта функция принимает в качестве аргументов ссылку на категорию и количество страниц для парсинга
+        System.Threading.Thread newThread = new System.Threading.Thread();
+
         public List<string> ParseLinks(string category, int pages)
         {
             List<string> links = new List<string>();
