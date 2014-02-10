@@ -49,15 +49,12 @@ namespace WindowsFormsApplication1
             {
                 MessageBox.Show("Ну что, программа начала работать!");
                 DownloadImage(GetImage(a));
-                newThread.Start();
             }
         }
         private void button4_Click(object sender, EventArgs e) //Кнопка остановки
         {
-            newThread.Abort();
+            //newThread.Abort();
         }
-
-        System.Threading.Thread newThread = new System.Threading.Thread();
 
         public List<string> ParseLinks(string category, int pages)
         {
