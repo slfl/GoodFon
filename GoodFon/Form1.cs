@@ -30,6 +30,7 @@ namespace WindowsFormsApplication1
         private void button2_Click(object sender, EventArgs e) //Кнопка инфы
         {
             MessageBox.Show("Программу написал Mansi");
+            MessageBox.Show("За скрипты спасибо Руслану Слинкову");
         }
 
         private void button3_Click(object sender, EventArgs e) //Кнопка старта
