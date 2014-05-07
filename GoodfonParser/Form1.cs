@@ -16,11 +16,7 @@ namespace GoodfonParser
 {
     public partial class Form1 : Form // Тут у нас первый поток проги...
     {
-        
-        public Form1()
-        {
-            InitializeComponent();
-        }
+        public Form1() { InitializeComponent(); }
 
         // Старт
         private void button1_Click(object sender, EventArgs e)
@@ -113,7 +109,7 @@ namespace GoodfonParser
             {
                 foreach (HtmlNode node in images)
                 {
-                    if (node.Attributes["href"].Value.ToString().Contains("download.php")) // Страница, с которой выдирам пикчи
+                    if (node.Attributes["href"].Value.ToString().Contains("download.php")) // Страница, с которой выдираем пикчи
                     {
                         imgurl = node.Attributes["href"].Value.ToString();
                         break;
