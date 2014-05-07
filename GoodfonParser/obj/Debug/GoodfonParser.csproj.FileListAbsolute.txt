@@ -35,7 +35,6 @@ E:\Прочее\GitHub\GoodFon\GoodfonParser\bin\Debug\HtmlAgilityPack.pdb
 E:\Прочее\GitHub\GoodFon\GoodfonParser\bin\Debug\HtmlAgilityPack.xml
 E:\Прочее\GitHub\GoodFon\GoodfonParser\bin\Debug\HtmlAgilityPack.1.4.6.0.Fakes.xml
 E:\Прочее\GitHub\GoodFon\GoodfonParser\bin\Debug\ru\Microsoft.QualityTools.Testing.Fakes.resources.dll
-E:\Прочее\GitHub\GoodFon\GoodfonParser\obj\Debug\GoodfonParser.csprojResolveAssemblyReference.cache
 E:\Прочее\GitHub\GoodFon\GoodfonParser\obj\Debug\GoodfonParser.Form1.resources
 E:\Прочее\GitHub\GoodFon\GoodfonParser\obj\Debug\GoodfonParser.Properties.Resources.resources
 E:\Прочее\GitHub\GoodFon\GoodfonParser\obj\Debug\GoodfonParser.csproj.GenerateResource.Cache

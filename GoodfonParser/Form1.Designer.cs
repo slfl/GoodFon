@@ -109,6 +109,7 @@
             // 
             this.listBox1.FormattingEnabled = true;
             this.listBox1.Items.AddRange(new object[] {
+            "http://www.goodfon.ru/catalog/hi-tech/",
             "http://www.goodfon.ru/catalog/abstraction/",
             "http://www.goodfon.ru/catalog/aviation/",
             "http://www.goodfon.ru/catalog/anime/",
