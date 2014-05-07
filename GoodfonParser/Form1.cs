@@ -55,7 +55,7 @@ namespace GoodfonParser
         {
             List<string> links = new List<string>();
 
-            for(int i = 0; i <= pages; ++i)
+            for (int i = 1; i <= pages; ++i)
             {
                 HtmlAgilityPack.HtmlDocument HD = new HtmlAgilityPack.HtmlDocument();
                 var web = new HtmlWeb
