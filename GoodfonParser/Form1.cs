@@ -38,10 +38,10 @@ namespace GoodfonParser
             Application.Exit();
         }
 
-        // Стоп
+        // Стоп - Временно убиваю процесс проги. Доделаю стоп после многопоточности.
         private void button3_Click(object sender, EventArgs e)
         {
-
+            Environment.Exit(0);
         }
 
         // Инфа о говнокодерах
