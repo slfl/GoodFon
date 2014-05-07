@@ -152,12 +152,7 @@ namespace GoodfonParser
 
         }
 
-        // Ссылка на страницу для парсинга
-        private void textBox1_TextChanged(object sender, EventArgs e)
-        {
-
-        }
-
+        // Меню с выбором категории на пикчи
         private void listBox1_SelectedIndexChanged(object sender, EventArgs e)
         {
 
