@@ -171,6 +171,8 @@ namespace GoodfonParser
 
     public partial class Form2 : Form // Второй поток проги. БЛЯДОПРОГИ!
     {
-    
+        public Form2() { InitializeComponent(); }
+
+
     }
 }
