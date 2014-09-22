@@ -22,6 +22,8 @@
             this.button3 = new System.Windows.Forms.Button();
             this.button4 = new System.Windows.Forms.Button();
             this.listBox1 = new System.Windows.Forms.ListBox();
+            this.button5 = new System.Windows.Forms.Button();
+            this.richTextBox1 = new System.Windows.Forms.RichTextBox();
             this.SuspendLayout();
             // 
             // textBox2
@@ -125,18 +127,39 @@
             "http://www.goodfon.ru/catalog/textures/",
             "http://www.goodfon.ru/catalog/fantasy/",
             "http://www.goodfon.ru/catalog/films/",
-            "http://www.goodfon.ru/catalog/flowers/"});
+            "http://www.goodfon.ru/catalog/flowers/",
+            "http://www.goodfon.ru/catalog/erotic/"});
             this.listBox1.Location = new System.Drawing.Point(12, 12);
             this.listBox1.Name = "listBox1";
             this.listBox1.Size = new System.Drawing.Size(246, 173);
             this.listBox1.TabIndex = 8;
             this.listBox1.SelectedIndexChanged += new System.EventHandler(this.listBox1_SelectedIndexChanged);
             // 
+            // button5
+            // 
+            this.button5.Location = new System.Drawing.Point(17, 316);
+            this.button5.Name = "button5";
+            this.button5.Size = new System.Drawing.Size(115, 23);
+            this.button5.TabIndex = 9;
+            this.button5.Text = "Логинимся";
+            this.button5.UseVisualStyleBackColor = true;
+            this.button5.Click += new System.EventHandler(this.button5_Click);
+            // 
+            // richTextBox1
+            // 
+            this.richTextBox1.Location = new System.Drawing.Point(138, 315);
+            this.richTextBox1.Name = "richTextBox1";
+            this.richTextBox1.Size = new System.Drawing.Size(120, 24);
+            this.richTextBox1.TabIndex = 10;
+            this.richTextBox1.Text = "";
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(270, 321);
+            this.ClientSize = new System.Drawing.Size(270, 348);
+            this.Controls.Add(this.richTextBox1);
+            this.Controls.Add(this.button5);
             this.Controls.Add(this.listBox1);
             this.Controls.Add(this.button4);
             this.Controls.Add(this.button3);
@@ -160,12 +183,15 @@
         private System.Windows.Forms.Button button3;
         private System.Windows.Forms.Button button4;
         private System.Windows.Forms.ListBox listBox1;
+        private System.Windows.Forms.Button button5;
+        private System.Windows.Forms.RichTextBox richTextBox1;
     }
 
     partial class Form2
     {
         private void InitializeComponent()
         {
+
 
         }
     }

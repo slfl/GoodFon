@@ -25,7 +25,7 @@ namespace GoodfonParser
             foreach (string a in images)
             {
                 DownloadImage(GetImage(a));
-            }
+            } 
         }
 
         // Выход
@@ -37,7 +37,7 @@ namespace GoodfonParser
         // Стоп - Временно убиваю процесс проги. Доделаю стоп после многопоточности.
         private void button3_Click(object sender, EventArgs e)
         {
-            Environment.Exit(0);
+            //Environment.Exit(0);
         }
 
         // Инфа о говнокодерах
@@ -58,7 +58,7 @@ namespace GoodfonParser
                 MessageBox.Show("Вот пидр...");
             }
         }
-
+        
         // А эта функция принимает в качестве аргументов ссылку на категорию и количество страниц для парсинга.
         public List<string> ParseLinks(string category, int pages)
         {
@@ -165,6 +165,53 @@ namespace GoodfonParser
         private void listBox1_SelectedIndexChanged(object sender, EventArgs e)
         {
 
+        }
+
+        // Логинимся
+        private void button5_Click(object sender, EventArgs e)
+        {
+            HttpWebRequest request = (HttpWebRequest)HttpWebRequest.Create("http://www.goodfon.ru/user/enter.php");
+            request.ProtocolVersion = new Version("1.1");
+            request.Method = "POST";
+            request.KeepAlive = true;
+            request.Headers.Add(HttpRequestHeader.AcceptLanguage, ("ru-RU,ru;q=0.8,en-US;q=0.6,en;q=0.4"));
+            request.Headers.Add(HttpRequestHeader.AcceptEncoding, ("gzip, deflate"));
+            request.UserAgent = "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/38.0.2125.66 Safari/537.36";
+            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            request.CookieContainer = new CookieContainer();
+            request.ContentType = "application/x-www-form-urlencoded";
+            request.AllowAutoRedirect = false;
+
+            string Login = "логин";
+            string Password = "пасс";
+            string authString = "login=" + Login + "&pas=" + Password;
+
+            UTF8Encoding encodind = new UTF8Encoding();
+            byte[] buffer = encodind.GetBytes(authString);
+            using (Stream newStream = request.GetRequestStream())
+            {
+                newStream.Write(buffer, 0, authString.Length);
+            }
+
+            // авторизация
+
+            CookieContainer cookies = new CookieContainer();
+
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            {
+                // запоминаем куки
+                foreach (Cookie c in response.Cookies)
+                {
+                    cookies.Add(c);
+                }
+                // --
+
+                Encoding responseEncoding = Encoding.GetEncoding(response.CharacterSet);
+                using (StreamReader strReader = new StreamReader(response.GetResponseStream(), responseEncoding))
+                {
+                    richTextBox1.Text = strReader.ReadToEnd();
+                }
+            }
         }
 
     }

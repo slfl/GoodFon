@@ -5,6 +5,10 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Threading;
 
+using System.IO;
+using System.Net;
+using System.Text;
+
 namespace GoodfonParser
 {
     class Program
@@ -29,6 +33,8 @@ namespace GoodfonParser
         static void ParserScript() // Второй поток
         {
             //Application.Run(new Form2());
+            
+
         }
     }
 }
