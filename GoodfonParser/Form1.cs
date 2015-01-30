@@ -149,7 +149,7 @@ namespace GoodfonParser
             webclient.DownloadFile(img, filename);
         }
 
-        // Текст
+        // Порог страниц
         private void label1_Click(object sender, EventArgs e)
         {
 
@@ -170,7 +170,7 @@ namespace GoodfonParser
         // Логинимся
         private void button5_Click(object sender, EventArgs e)
         {
-            HttpWebRequest request = (HttpWebRequest)HttpWebRequest.Create("http://www.goodfon.ru/user/enter.php");
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("http://www.goodfon.ru/user/enter.php");
             request.ProtocolVersion = new Version("1.1");
             request.Method = "POST";
             request.KeepAlive = true;
@@ -203,6 +203,8 @@ namespace GoodfonParser
                 foreach (Cookie c in response.Cookies)
                 {
                     cookies.Add(c);
+                 // cookies.SetCookies();
+
                 }
                 // --
 
