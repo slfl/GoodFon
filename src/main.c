@@ -122,6 +122,7 @@ static void theme_brushes_rebuild(void)
 #define IDC_CHK_STARTUP 3026
 #define IDC_CHK_AUTOUPD 3027
 #define IDC_CHK_UPDNOTIFY 3028
+#define IDC_BTN_INSTALL 3029
 
 #define MAX_THEMES      64
 #define JAR_SIZE        4096
@@ -2937,12 +2938,18 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             return TRUE;
         }
         if (d->CtlType == ODT_BUTTON) {
-            int pressed = (d->itemState & ODS_SELECTED) != 0;
-            int primary = (d->CtlID == IDC_BTN_SIGNIN);
+            int pressed  = (d->itemState & ODS_SELECTED) != 0;
+            int disabled = (d->itemState & ODS_DISABLED) != 0;
+            int primary  = (d->CtlID == IDC_BTN_SIGNIN);
             COLORREF fill = primary ? (pressed ? RGB(0,90,170) : cr_accent())
                                     : (pressed ? cr_btnpress() : cr_btnface());
             COLORREF txt  = primary ? RGB(255,255,255) : cr_txt();
             COLORREF bord = primary ? fill : cr_border();
+            if (disabled) {   /* приглушённый вид неактивной кнопки */
+                fill = cr_btnface();
+                txt  = g_ui_theme ? RGB(110,110,110) : RGB(170,170,170);
+                bord = cr_border();
+            }
             FillRect(d->hDC, &d->rcItem, g_br_bg);      /* фон под скруглением */
             HBRUSH hb = CreateSolidBrush(fill);
             HPEN   hp = CreatePen(PS_SOLID, 1, bord);
@@ -3138,7 +3145,10 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             settings_relaunch();
         }
         else if (id == IDC_BTN_UPDATE && code == BN_CLICKED) {
-            run_update_async(0, 1);   /* ручная проверка — сразу ставим, если есть */
+            run_update_async(0, 0);   /* только проверка; при наличии — активируем «Установить» */
+        }
+        else if (id == IDC_BTN_INSTALL && code == BN_CLICKED) {
+            run_update_async(0, 1);   /* установить найденное обновление */
         }
         else if (id == IDC_BTN_CLOSE && code == BN_CLICKED) {
             DestroyWindow(h);
@@ -3164,6 +3174,9 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             g_update_status == 5 ? avail : L"";
         SetWindowTextW(st, txt);
         InvalidateRect(st, NULL, TRUE);
+        /* «Установить обновление» активна только когда найдена новая версия */
+        { HWND bi = GetDlgItem(h, IDC_BTN_INSTALL);
+          if (bi) { EnableWindow(bi, g_update_status == 5); InvalidateRect(bi, NULL, TRUE); } }
         return 0;
     }
     case WM_APP_LOGINRESULT: {
@@ -3393,8 +3406,10 @@ static void open_settings(void)
        WS_TABSTOP | BS_AUTOCHECKBOX, CX, y, 360, 22, IDC_CHK_UPDNOTIFY, 3);
     y += 34;
     mk(h, L"BUTTON", TW(L"Проверить обновления", L"Check for updates"),
-       WS_TABSTOP | BS_OWNERDRAW, CX, y, 200, 28, IDC_BTN_UPDATE, 3);
-    mk(h, L"STATIC", L"", SS_LEFT, CX, y + 32, 360, 34, IDC_ST_UPDATE, 3);
+       WS_TABSTOP | BS_OWNERDRAW, CX, y, 180, 28, IDC_BTN_UPDATE, 3);
+    mk(h, L"BUTTON", TW(L"Установить обновление", L"Install update"),
+       WS_TABSTOP | WS_DISABLED | BS_OWNERDRAW, CX + 190, y, 180, 28, IDC_BTN_INSTALL, 3);
+    mk(h, L"STATIC", L"", SS_LEFT, CX, y + 34, 360, 34, IDC_ST_UPDATE, 3);
 
     SendMessageW(GetDlgItem(h, IDC_CHK_STARTUP),   BM_SETCHECK, g_cfg.check_on_startup ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(GetDlgItem(h, IDC_CHK_AUTOUPD),   BM_SETCHECK, g_cfg.auto_update ? BST_CHECKED : BST_UNCHECKED, 0);
