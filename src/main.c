@@ -86,6 +86,7 @@ static void theme_brushes_rebuild(void)
 
 /* Пункты меню */
 #define IDM_UPDATE      100
+#define IDM_BACK        106   /* вернуть предыдущие обои из истории */
 #define IDM_FAVORITE        101
 #define IDM_UNFAVORITE      102
 #define IDM_PAUSE       103
@@ -235,6 +236,14 @@ static Config g_cfg;
 static WCHAR  g_favorite_dir[MAX_PATH];
 static WCHAR  g_current_image[MAX_PATH];  /* точный файл, который сейчас на экране */
 
+/* История обоев для кнопки «назад» (браузерная логика: новая смена берёт
+ * свежую картинку и обрезает «вперёд», back идёт по показанным ранее). */
+#define HIST_MAX 16
+static WCHAR  g_hist[HIST_MAX][MAX_PATH];
+static int    g_hist_n = 0;               /* сколько элементов в истории */
+static int    g_hist_cur = -1;            /* индекс текущего показанного */
+static int    g_from_history = 0;         /* 1 = ставим из истории (не пушить) */
+
 /* Cookie-джар per-domain (наш собственный, WinHTTP-cookies отключены) */
 static char g_jar_com[JAR_SIZE];
 static char g_jar_ru[JAR_SIZE];
@@ -267,7 +276,6 @@ static HINSTANCE g_hinst;
 static NOTIFYICONDATAW g_nid;
 static volatile LONG g_busy = 0;
 static int g_paused = 0;
-static int g_tray_mode = 0;
 static int g_debug = 0;
 static FILE *g_log = NULL;
 static WCHAR g_log_path[MAX_PATH];
@@ -520,6 +528,10 @@ static int settings_load(void)
 
     if (!reg_get_str(L"resolution", g_cfg.resolution, sizeof(g_cfg.resolution)) || !g_cfg.resolution[0])
         strcpy(g_cfg.resolution, "1920x1080");
+    if (!_stricmp(g_cfg.resolution, "auto")) {   /* убрали режим — чистим старое значение */
+        strcpy(g_cfg.resolution, "1920x1080");
+        reg_set_str(L"resolution", g_cfg.resolution);
+    }
     if (!reg_get_str(L"theme", g_cfg.theme, sizeof(g_cfg.theme)) || !g_cfg.theme[0])
         strcpy(g_cfg.theme, "nature");
     reg_get_str(L"save_dir", g_cfg.save_dir, sizeof(g_cfg.save_dir));
@@ -870,6 +882,9 @@ static const IID IID_IActiveDesktop_ =
  * и режим позиционирования "растянуть". Объявляем минимальный интерфейс сами. */
 typedef struct MyDesktopWallpaper MyDesktopWallpaper;
 typedef struct {
+    /* Порядок методов обязан точно совпадать с интерфейсом COM. Реально
+     * вызываем только SetWallpaper, GetMonitorDevicePathAt/Count и SetPosition;
+     * остальные объявлены лишь для правильного смещения в vtbl. */
     HRESULT (STDMETHODCALLTYPE *QueryInterface)(MyDesktopWallpaper *, REFIID, void **);
     ULONG   (STDMETHODCALLTYPE *AddRef)(MyDesktopWallpaper *);
     ULONG   (STDMETHODCALLTYPE *Release)(MyDesktopWallpaper *);
@@ -881,7 +896,7 @@ typedef struct {
     HRESULT (STDMETHODCALLTYPE *SetBackgroundColor)(MyDesktopWallpaper *, COLORREF);
     HRESULT (STDMETHODCALLTYPE *GetBackgroundColor)(MyDesktopWallpaper *, COLORREF *);
     HRESULT (STDMETHODCALLTYPE *SetPosition)(MyDesktopWallpaper *, int);
-    /* остальные методы интерфейса не используются */
+    /* дальнейшие методы интерфейса не нужны */
 } MyDesktopWallpaperVtbl;
 struct MyDesktopWallpaper { const MyDesktopWallpaperVtbl *lpVtbl; };
 
@@ -889,7 +904,6 @@ static const CLSID CLSID_DesktopWallpaper_ =
 { 0xC2CF3110, 0x460E, 0x4fc1, {0xB9,0xD0,0x8A,0x1C,0x0C,0x9C,0xC4,0xBD} };
 static const IID IID_IDesktopWallpaper_ =
 { 0xB92B56A9, 0x8B55, 0x4E14, {0x9A,0x89,0x01,0x99,0xBB,0xB6,0xF9,0x3B} };
-#define DWPOS_STRETCH_ 2
 #define DWPOS_FILL_    4
 
 static void enable_active_desktop(void)
@@ -976,6 +990,21 @@ static void wp_style_stretch_reg(void)
     }
 }
 
+/* Добавить картинку в историю (обрезая «вперёд»). */
+static void history_push(const WCHAR *path)
+{
+    if (!path || !path[0]) return;
+    if (g_hist_cur >= 0 && !_wcsicmp(g_hist[g_hist_cur], path)) return;  /* тот же кадр */
+    g_hist_n = g_hist_cur + 1;                          /* обрезаем forward */
+    if (g_hist_n >= HIST_MAX) {                          /* нет места — выкинуть старейший */
+        for (int i = 1; i < HIST_MAX; i++) wcscpy(g_hist[i - 1], g_hist[i]);
+        g_hist_n = HIST_MAX - 1;
+    }
+    wcsncpy(g_hist[g_hist_n], path, MAX_PATH - 1); g_hist[g_hist_n][MAX_PATH - 1] = 0;
+    g_hist_cur = g_hist_n;
+    g_hist_n++;
+}
+
 static int set_wallpaper(const WCHAR *path)
 {
     char p8[MAX_PATH * 3]; wide_to_utf8(path, p8, sizeof(p8));
@@ -1039,6 +1068,7 @@ static int set_wallpaper(const WCHAR *path)
         LOG_INFO(T("Обои выставлены: %s", "Wallpaper set: %s"), p8);
         wcsncpy(g_current_image, path, MAX_PATH - 1);  /* фиксируем текущую картинку */
         g_current_image[MAX_PATH - 1] = 0;
+        if (!g_from_history) history_push(path);       /* обычная смена — в историю */
     }
     else    LOG_ERROR(T("Обои НЕ выставлены: %s", "Wallpaper NOT set: %s"), p8);
     return ok;
@@ -1055,14 +1085,11 @@ static void get_current_wallpaper(WCHAR *out, int outsz)
 static void notify_user(const WCHAR *title, const WCHAR *text)
 {
     if (!g_cfg.notify) return;
-    if (g_tray_mode) {
-        g_nid.uFlags = NIF_INFO;
-        wcsncpy(g_nid.szInfoTitle, title, 63);
-        wcsncpy(g_nid.szInfo, text, 255);
-        g_nid.dwInfoFlags = NIIF_INFO;
-        Shell_NotifyIconW(NIM_MODIFY, &g_nid);
-    }
-    /* в разовом CLI-режиме уведомление опускаем — есть логи */
+    g_nid.uFlags = NIF_INFO;
+    wcsncpy(g_nid.szInfoTitle, title, 63);
+    wcsncpy(g_nid.szInfo, text, 255);
+    g_nid.dwInfoFlags = NIIF_INFO;
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
 }
 
 /* ================= Файловые операции ================= */
@@ -1307,34 +1334,16 @@ static void make_absolute(const char *href, char *out, size_t sz)
  * следующий стандартный тир. Напр. 2K -> [2560x1440 .. 3840x2160),
  * 4K -> [3840x2160 .. 8400x3600). Если значение нестандартное — верхней
  * границы нет (берётся всё, что >= выбранного).                          */
-static void resolution_band(int *tw, int *th, int *nw, int *nh)
-{
-    static const int tiers[][2] = {
-        {1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160},
-        {7680, 4320}, {10240, 5760}
-    };
-    const int ntiers = (int)(sizeof(tiers) / sizeof(tiers[0]));
-    *tw = 0; *th = 0;
-    sscanf(g_cfg.resolution, "%dx%d", tw, th);
-    *nw = 1000000; *nh = 1000000;   /* по умолчанию верхней границы нет */
-    for (int i = 0; i < ntiers; i++) {
-        if (tiers[i][0] == *tw && tiers[i][1] == *th) {
-            if (i + 1 < ntiers) { *nw = tiers[i + 1][0]; *nh = tiers[i + 1][1]; }
-            break;
-        }
-    }
-}
-
-/* Найти прямой URL картинки нужного разрешения.
+/* Найти прямой URL картинки под целевое разрешение (tw x th; 0,0 = оригинал).
  * Возврат: 1 = найден (out), 0 = пропустить картинку, -1 = квота. */
-static int find_image_url(const char *image_page_url, char *out, size_t outsz)
+static int find_image_url_wh(const char *image_page_url, int tw, int th, char *out, size_t outsz)
 {
     HttpResp r;
     if (!http_request("GET", image_page_url, NULL, NULL, 15000, BODY_LIMIT, &r) ||
         r.status != 200 || !r.body) { free(r.body); return 0; }
 
     char dl_href[512] = "";
-    if (!_stricmp(g_cfg.resolution, "original")) {
+    if (tw <= 0 || th <= 0) {
         /* режим "Оригинал": берём ссылку с самым большим WxH */
         long best = -1;
         const char *p = r.body;
@@ -1357,17 +1366,12 @@ static int find_image_url(const char *image_page_url, char *out, size_t outsz)
             p += 5;
         }
     } else {
-        /* тир разрешения: берём разрешение, НАИБОЛЕЕ БЛИЗКОЕ к выбранному —
-         * наименьшее из тех, что >= выбранного; если таких нет — наибольшее
-         * доступное. Ультраширокие/панорамные отсекаем по соотношению сторон. */
-        int tw, th, nw, nh;
-        resolution_band(&tw, &th, &nw, &nh);
-        (void)nw; (void)nh;
+        /* берём разрешение, НАИБОЛЕЕ БЛИЗКОЕ к целевому — наименьшее из тех,
+         * что >= цели; если таких нет — наибольшее доступное.
+         * Ультраширокие/панорамные отсекаем по соотношению сторон. */
         double ta = th ? (double)tw / th : 1.777;
-
-        long best_over = -1; int cwo = 0, cho = 0; char href_over[512] = "";  /* мин. из >= выбранного */
-        long best_any  = -1; int cwa = 0, cha = 0; char href_any[512]  = "";  /* наибольшее (запас) */
-
+        long best_over = -1; int cwo = 0, cho = 0; char href_over[512] = "";
+        long best_any  = -1; int cwa = 0, cha = 0; char href_any[512]  = "";
         const char *p = r.body;
         while ((p = strstr(p, "href=")) != NULL) {
             char href[512];
@@ -1396,18 +1400,16 @@ static int find_image_url(const char *image_page_url, char *out, size_t outsz)
             }
             p += 5;
         }
-
         int cw, ch;
         if (best_over >= 0) { strcpy(dl_href, href_over); cw = cwo; ch = cho; }
         else if (best_any >= 0) { strcpy(dl_href, href_any); cw = cwa; ch = cha; }
         else { cw = ch = 0; }
-
         if (dl_href[0] && (cw != tw || ch != th))
-            LOG_INFO(T("Тир %s: выбрано %dx%d", "Tier %s: chose %dx%d"), g_cfg.resolution, cw, ch);
+            LOG_INFO(T("Цель %dx%d: выбрано %dx%d", "Target %dx%d: chose %dx%d"), tw, th, cw, ch);
     }
     free(r.body);
     if (!dl_href[0]) {
-        LOG_INFO(T("Разрешение %s недоступно для этой картинки, пропускаем.", "Resolution %s is not available for this image, skipping."), g_cfg.resolution);
+        LOG_INFO(T("Нет подходящего разрешения для картинки, пропускаем.", "No suitable resolution for the image, skipping."));
         return 0;
     }
 
@@ -1594,6 +1596,75 @@ static int set_wallpaper_from_favorite(void)
     return 1;
 }
 
+/* Скачать одну случайную картинку под разрешение (tw x th; 0,0 = оригинал),
+ * сохранить путь в out. Возврат: 1 = ок, 0 = не нашли, -1 = квота. */
+static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz)
+{
+    const int IMG_BUDGET = 40;
+    int max_pages = 0, images_tried = 0, net_fails = 0;
+    const int NET_FAIL_LIMIT = g_cfg.max_attempts + 4;
+    char base[64]; base_url(base, sizeof(base));
+
+    while (images_tried < IMG_BUDGET) {
+        if (max_pages == 0) {
+            max_pages = get_max_pages();
+            if (max_pages == 0) {
+                if (++net_fails >= NET_FAIL_LIMIT) break;
+                LOG_WARN(T("Ошибка пагинации (сбой %d)", "Pagination error (failure %d)"), net_fails);
+                Sleep(1000);
+                continue;
+            }
+            LOG_INFO(T("Максимальное количество страниц: %d", "Maximum number of pages: %d"), max_pages);
+        }
+        int page = rand() % max_pages + 1;
+        char page_url[512];
+        if (page == 1) snprintf(page_url, sizeof(page_url), "%s/%s/", base, g_cfg.theme);
+        else snprintf(page_url, sizeof(page_url), "%s/%s/index-%d.html", base, g_cfg.theme, page);
+
+        HttpResp r;
+        if (!http_request("GET", page_url, NULL, NULL, 15000, BODY_LIMIT, &r) ||
+            r.status != 200 || !r.body) {
+            int st = r.status; free(r.body);
+            if (++net_fails >= NET_FAIL_LIMIT) {
+                LOG_WARN(T("Слишком много сетевых ошибок (последний статус %d)", "Too many network errors (last status %d)"), st);
+                break;
+            }
+            LOG_WARN(T("Страница раздела не загрузилась (статус %d)", "Section page failed to load (status %d)"), st);
+            continue;
+        }
+        static char links[64][512];
+        int n = collect_links(r.body, links, 64);
+        free(r.body);
+        if (n == 0) { LOG_WARN(T("На странице нет обоев, пробуем другую", "No wallpapers on the page, trying another")); continue; }
+
+        int per_page = n < 6 ? n : 6;
+        int start = rand() % n;
+        for (int k = 0; k < per_page && images_tried < IMG_BUDGET; k++) {
+            char image_page[600];
+            make_absolute(links[(start + k) % n], image_page, sizeof(image_page));
+            images_tried++;
+            LOG_INFO(T("Проверка #%d: %s", "Check #%d: %s"), images_tried, image_page);
+
+            char img_url[600];
+            int fr = find_image_url_wh(image_page, tw, th, img_url, sizeof(img_url));
+            if (fr == -1) return -1;         /* квота */
+            if (fr == 0) continue;
+
+            size_t len = 0;
+            char *data = download_image(img_url, &len);
+            if (!data) { LOG_WARN(T("Не удалось скачать картинку, пробуем другую", "Failed to download image, trying another")); continue; }
+            WCHAR saved[MAX_PATH];
+            int sok = save_image(img_url, data, len, saved, MAX_PATH);
+            free(data);
+            if (!sok) continue;
+            wcsncpy(out, saved, outsz - 1); out[outsz - 1] = 0;
+            LOG_INFO(T("Найдено за %d проверок.", "Found after %d checks."), images_tried);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void do_update(void)
 {
     if (!ensure_session()) {
@@ -1615,91 +1686,43 @@ static void do_update(void)
         LOG_INFO(T("Папка Favorite пуста, продолжаем загрузку с сайта", "Favorite folder is empty, continuing download from site"));
     }
 
-    /* Ищем картинку с нужным разрешением. Перебираем много изображений
-     * (и по несколько с каждой загруженной страницы), пока не найдём.
-     * Сетевые сбои считаем отдельно, чтобы не долбить упавший сайт. */
-    const int IMG_BUDGET = 40;   /* сколько картинок проверить максимум */
-    int max_pages = 0;
-    int images_tried = 0;
-    int net_fails = 0;
-    const int NET_FAIL_LIMIT = g_cfg.max_attempts + 4;
-
-    char base[64]; base_url(base, sizeof(base));
-
-    while (images_tried < IMG_BUDGET) {
-        if (max_pages == 0) {
-            max_pages = get_max_pages();
-            if (max_pages == 0) {
-                if (++net_fails >= NET_FAIL_LIMIT) break;
-                LOG_WARN(T("Ошибка пагинации (сбой %d)", "Pagination error (failure %d)"), net_fails);
-                Sleep(1000);
-                continue;
-            }
-            LOG_INFO(T("Максимальное количество страниц: %d", "Maximum number of pages: %d"), max_pages);
-        }
-
-        int page = rand() % max_pages + 1;
-        char page_url[512];
-        if (page == 1)
-            snprintf(page_url, sizeof(page_url), "%s/%s/", base, g_cfg.theme);
-        else
-            snprintf(page_url, sizeof(page_url), "%s/%s/index-%d.html",
-                     base, g_cfg.theme, page);
-
-        HttpResp r;
-        if (!http_request("GET", page_url, NULL, NULL, 15000, BODY_LIMIT, &r) ||
-            r.status != 200 || !r.body) {
-            int st = r.status; free(r.body);
-            if (++net_fails >= NET_FAIL_LIMIT) {
-                LOG_WARN(T("Слишком много сетевых ошибок (последний статус %d)", "Too many network errors (last status %d)"), st);
-                break;
-            }
-            LOG_WARN(T("Страница раздела не загрузилась (статус %d)", "Section page failed to load (status %d)"), st);
-            continue;
-        }
-        static char links[64][512];
-        int n = collect_links(r.body, links, 64);
-        free(r.body);
-        if (n == 0) { LOG_WARN(T("На странице нет обоев, пробуем другую", "No wallpapers on the page, trying another")); continue; }
-
-        /* пробуем несколько картинок с этой страницы (без дублей) */
-        int per_page = n < 6 ? n : 6;
-        int start = rand() % n;
-        for (int k = 0; k < per_page && images_tried < IMG_BUDGET; k++) {
-            char image_page[600];
-            make_absolute(links[(start + k) % n], image_page, sizeof(image_page));
-            images_tried++;
-            LOG_INFO(T("Проверка #%d: %s", "Check #%d: %s"), images_tried, image_page);
-
-            char img_url[600];
-            int fr = find_image_url(image_page, img_url, sizeof(img_url));
-            if (fr == -1) {
-                notify_user(TW(L"GoodFon: лимит исчерпан", L"GoodFon: limit reached"), TW(L"Загружаем из избранного.", L"Loading from favorites."));
-                fallback_local(1);
-                return;
-            }
-            if (fr == 0) continue;   /* разрешение не подошло — следующая */
-
-            size_t len = 0;
-            char *data = download_image(img_url, &len);
-            if (!data) { LOG_WARN(T("Не удалось скачать картинку, пробуем другую", "Failed to download image, trying another")); continue; }
-
-            WCHAR saved[MAX_PATH];
-            int sok = save_image(img_url, data, len, saved, MAX_PATH);
-            free(data);
-            if (!sok) continue;
-
-            cleanup_old_images();
-            set_wallpaper(saved);
-            LOG_INFO(T("Найдено за %d проверок.", "Found after %d checks."), images_tried);
-            WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(saved));
-            notify_user(TW(L"Обои обновлены — с сайта", L"Wallpaper updated — from site"), info);
-            return;
-        }
+    /* одно фиксированное разрешение; распределение по мониторам делает set_wallpaper */
+    int tw = 0, th = 0;
+    if (_stricmp(g_cfg.resolution, "original") != 0) sscanf(g_cfg.resolution, "%dx%d", &tw, &th);
+    WCHAR saved[MAX_PATH];
+    int fr = fetch_one_wallpaper(tw, th, saved, MAX_PATH);
+    if (fr == -1) {
+        notify_user(TW(L"GoodFon: лимит исчерпан", L"GoodFon: limit reached"), TW(L"Загружаем из избранного.", L"Loading from favorites."));
+        fallback_local(1); return;
     }
-    LOG_ERROR(T("Не найдено изображение с разрешением %s (проверено %d).", "No image found with resolution %s (checked %d)."),
-              g_cfg.resolution, images_tried);
-    fallback_local(0);
+    if (fr != 1) {
+        LOG_ERROR(T("Не найдено изображение с разрешением %s.", "No image found with resolution %s."), g_cfg.resolution);
+        fallback_local(0); return;
+    }
+    cleanup_old_images();
+    set_wallpaper(saved);
+    WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(saved));
+    notify_user(TW(L"Обои обновлены — с сайта", L"Wallpaper updated — from site"), info);
+}
+
+/* Вернуть предыдущие обои из истории (ближайший существующий файл до курсора). */
+static void history_back(void)
+{
+    int t = g_hist_cur - 1;
+    while (t >= 0 && GetFileAttributesW(g_hist[t]) == INVALID_FILE_ATTRIBUTES) t--;
+    if (t < 0) {
+        LOG_INFO(T("История: предыдущих обоев нет.", "History: no previous wallpaper."));
+        notify_user(APP_NAME, TW(L"Предыдущих обоев нет.", L"No previous wallpaper."));
+        return;
+    }
+    g_hist_cur = t;
+    g_from_history = 1;
+    set_wallpaper(g_hist[g_hist_cur]);
+    g_from_history = 0;
+    char p8[MAX_PATH * 3]; wide_to_utf8(g_hist[g_hist_cur], p8, sizeof(p8));
+    LOG_INFO(T("История: возврат к %s", "History: back to %s"), p8);
+    WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(g_hist[g_hist_cur]));
+    notify_user(TW(L"Возврат к прошлым обоям", L"Back to previous wallpaper"), info);
 }
 
 static void do_favorite(void)
@@ -1729,7 +1752,9 @@ static void do_favorite(void)
         if (GetFileAttributesW(dest) == INVALID_FILE_ATTRIBUTES)
             CopyFileW(cur, dest, FALSE);
         LOG_INFO(T("Изображение скопировано в папку Favorite/%s", "Image copied to folder Favorite/%s"), g_cfg.theme);
+        g_from_history = 1;              /* служебный re-point, не в историю */
         set_wallpaper(dest); /* переносим «текущую» на копию из Favorite */
+        g_from_history = 0;
     }
 
     char page_url[600];
@@ -2012,6 +2037,7 @@ static DWORD WINAPI worker_thread(LPVOID param)
     int action = (int)(INT_PTR)param;
     switch (action) {
         case IDM_UPDATE: do_update(); break;
+        case IDM_BACK:   history_back(); break;
         case IDM_FAVORITE:   do_favorite();   break;
         case IDM_UNFAVORITE: do_unfavorite(); break;
         case IDM_LOGIN:
@@ -3464,6 +3490,8 @@ static void show_menu(void)
     g_min = 0;
     HMENU m = CreatePopupMenu();
     menu_add(m, TW(L"Сменить обои сейчас", L"Change wallpaper now"), IDM_UPDATE, 0, 0);
+    menu_add(m, TW(L"Вернуть прошлые обои", L"Restore previous wallpaper"), IDM_BACK,
+             0, g_hist_cur <= 0);
     menu_add(m, TW(L"Добавить в избранное ♥", L"Add to favorites ♥"), IDM_FAVORITE, 0, 0);
     menu_add(m, TW(L"Убрать из избранного ♡", L"Remove from favorites ♡"), IDM_UNFAVORITE, 0, 0);
     menu_sep(m);
@@ -3581,7 +3609,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_COMMAND: {
         int id = LOWORD(wp);
-        if (id == IDM_UPDATE || id == IDM_FAVORITE || id == IDM_UNFAVORITE)
+        if (id == IDM_UPDATE || id == IDM_BACK || id == IDM_FAVORITE || id == IDM_UNFAVORITE)
             run_async(id);
         else if (id == IDM_PAUSE) { g_paused = !g_paused; apply_interval(); }
         else if (id == IDM_SETTINGS) open_settings();
@@ -3639,7 +3667,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdline, int show)
     }
 
     /* Трей-режим */
-    g_tray_mode = 1;
     WNDCLASSW wc = {0};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
