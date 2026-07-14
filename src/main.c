@@ -119,6 +119,9 @@ static void theme_brushes_rebuild(void)
 #define IDC_CB_SAVELOC  3023
 #define IDC_BTN_BROWSE  3024
 #define IDC_ST_SAVEPATH 3025
+#define IDC_CHK_STARTUP 3026
+#define IDC_CHK_AUTOUPD 3027
+#define IDC_CHK_UPDNOTIFY 3028
 
 #define MAX_THEMES      64
 #define JAR_SIZE        4096
@@ -221,6 +224,9 @@ typedef struct {
     char domain_pref[8];                /* com / ru / auto */
     int  interval_min;
     int  update_interval_min;           /* автопроверка обновлений: 0=выкл, 60, 1440, 10080 */
+    int  auto_update;                   /* 1 = ставить обновления автоматически */
+    int  update_notify;                 /* 1 = уведомлять о новых версиях */
+    int  check_on_startup;              /* 1 = проверять обновления при запуске */
     int  counter;
 } Config;
 
@@ -239,7 +245,8 @@ static const char *g_hosts[2] = { "www.goodfon.com", "www.goodfon.ru" };
 /* Трей / состояние */
 static HWND  g_hwnd;
 static HWND  g_set_hwnd = NULL;         /* окно настроек (объявлено рано: нужно worker'у) */
-static int   g_update_status = 0;       /* 0 нет, 1 проверка, 2 актуально, 3 ставится, 4 ошибка */
+static int   g_update_status = 0;       /* 0 нет,1 проверка,2 актуально,3 ставится,4 ошибка,5 доступна */
+static WCHAR g_new_version[32] = L"";   /* версия найденного обновления (для статуса/уведомления) */
 #define WM_APP_LOGINRESULT  (WM_APP + 3)
 #define WM_APP_UPDATERESULT (WM_APP + 4)
 #define WM_APP_STATS        (WM_APP + 5)
@@ -473,6 +480,9 @@ static void settings_write_defaults(void)
     reg_set_dword(L"max_files", 10);
     reg_set_dword(L"favorite_every_n", 10);
     reg_set_dword(L"update_interval_min", 0);
+    reg_set_dword(L"auto_update", 0);
+    reg_set_dword(L"update_notify", 1);
+    reg_set_dword(L"check_on_startup", 0);
     reg_set_dword(L"max_attempts", 3);
     reg_set_dword(L"notify", 1);
     reg_set_dword(L"interval_min", 10);
@@ -517,6 +527,9 @@ static int settings_load(void)
     g_cfg.max_files    = reg_get_dword(L"max_files", 10);
     g_cfg.favorite_every_n = reg_get_dword(L"favorite_every_n", 10);
     g_cfg.update_interval_min = reg_get_dword(L"update_interval_min", 0);
+    g_cfg.auto_update      = reg_get_dword(L"auto_update", 0);
+    g_cfg.update_notify    = reg_get_dword(L"update_notify", 1);
+    g_cfg.check_on_startup = reg_get_dword(L"check_on_startup", 0);
     g_cfg.max_attempts = reg_get_dword(L"max_attempts", 3);
     g_cfg.notify       = reg_get_dword(L"notify", 1);
     g_cfg.interval_min = reg_get_dword(L"interval_min", 10);
@@ -2059,7 +2072,27 @@ static void upd_status(int code)
     if (g_set_hwnd) PostMessageW(g_set_hwnd, WM_APP_UPDATERESULT, code, 0);
 }
 
-static void check_update(int silent)
+/* Прочитать версию ("2.4") из ресурса версии exe-файла. 1 = успех. */
+static int get_exe_version(const WCHAR *path, WCHAR *out, int outsz)
+{
+    DWORD dummy, sz = GetFileVersionInfoSizeW(path, &dummy);
+    if (!sz) return 0;
+    void *buf = malloc(sz);
+    if (!buf) return 0;
+    int ok = 0;
+    if (GetFileVersionInfoW(path, 0, sz, buf)) {
+        VS_FIXEDFILEINFO *fi = NULL; UINT len = 0;
+        if (VerQueryValueW(buf, L"\\", (void **)&fi, &len) && fi) {
+            _snwprintf(out, outsz, L"%u.%u",
+                       HIWORD(fi->dwFileVersionMS), LOWORD(fi->dwFileVersionMS));
+            ok = 1;
+        }
+    }
+    free(buf);
+    return ok;
+}
+
+static void check_update(int silent, int install)
 {
     WCHAR self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
     WCHAR dir[MAX_PATH];  wcscpy(dir, self); PathRemoveFileSpecW(dir);
@@ -2122,6 +2155,28 @@ static void check_update(int silent)
         return;
     }
 
+    /* найдена новая версия — читаем её номер для статуса/уведомления */
+    if (!get_exe_version(upd, g_new_version, 32)) wcscpy(g_new_version, L"");
+    LOG_INFO(T("Доступна новая версия: %ls", "New version available: %ls"),
+             g_new_version[0] ? g_new_version : L"?");
+
+    if (!install) {
+        /* только уведомить — установку пользователь запустит сам */
+        upd_status(5);
+        DeleteFileW(upd);
+        if (g_cfg.update_notify || !silent) {
+            WCHAR m[128];
+            if (g_new_version[0])
+                _snwprintf(m, 128, TW(L"Доступна новая версия %ls. Откройте «Обновления».",
+                                      L"New version %ls available. Open «Updates»."), g_new_version);
+            else
+                wcscpy(m, TW(L"Доступна новая версия. Откройте «Обновления».",
+                             L"A new version is available. Open «Updates»."));
+            notify_user(APP_NAME, m);
+        }
+        return;
+    }
+
     WCHAR old[MAX_PATH]; _snwprintf(old, MAX_PATH, L"%s.old", self);
     DeleteFileW(old);
     if (!MoveFileExW(self, old, MOVEFILE_REPLACE_EXISTING)) {
@@ -2146,11 +2201,17 @@ static void check_update(int silent)
     ExitProcess(0);
 }
 
-/* Запуск проверки обновлений в отдельном потоке (не блокирует трей и не мешает g_busy). */
-static DWORD WINAPI update_thread(LPVOID p) { check_update((int)(INT_PTR)p); return 0; }
-static void run_update_async(int silent)
+/* Запуск проверки обновлений в отдельном потоке. Упаковываем silent|install в указатель. */
+static DWORD WINAPI update_thread(LPVOID p)
 {
-    HANDLE t = CreateThread(NULL, 0, update_thread, (LPVOID)(INT_PTR)silent, 0, NULL);
+    INT_PTR v = (INT_PTR)p;
+    check_update((int)(v & 1), (int)((v >> 1) & 1));
+    return 0;
+}
+static void run_update_async(int silent, int install)
+{
+    INT_PTR v = (silent & 1) | ((install & 1) << 1);
+    HANDLE t = CreateThread(NULL, 0, update_thread, (LPVOID)v, 0, NULL);
     if (t) CloseHandle(t);
 }
 
@@ -2571,10 +2632,11 @@ static void settings_set_page(HWND dlg, int page)
 {
     g_set_page = page;
     EnumChildWindows(dlg, show_page_cb, (LPARAM)page);
-    const WCHAR *titles[4] = {
+    const WCHAR *titles[5] = {
         TW(L"Настройки картинок", L"Image settings"),
         TW(L"Аккаунт",            L"Account"),
         TW(L"Дополнительно",      L"Additional"),
+        TW(L"Обновления",         L"Updates"),
         TW(L"О приложении",       L"About"),
     };
     SetDlgItemTextW(dlg, IDC_PGTITLE, titles[page]);
@@ -2714,7 +2776,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 SelectObject(dc, osp); DeleteObject(sp);
             }
         }
-        else if (g_set_page == 3) {
+        else if (g_set_page == 4) {
             SetBkMode(dc, TRANSPARENT);
             int x = 186, w = 372, y = 52;
             /* название */
@@ -2782,7 +2844,8 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                            : g_login_status == 2 ? RGB(220,70,70) : cr_txt());
         else if (cid == IDC_ST_UPDATE)
             SetTextColor(dc, g_update_status == 2 || g_update_status == 3 ? RGB(40,170,80)
-                           : g_update_status == 4 ? RGB(220,70,70) : cr_txt());
+                           : g_update_status == 4 ? RGB(220,70,70)
+                           : g_update_status == 5 ? cr_accent() : cr_txt());
         else
             SetTextColor(dc, cid == IDC_LNK_REG ? cr_accent() : cr_txt());
         SetBkColor(dc, cr_bg());
@@ -2840,9 +2903,9 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             }
             SetBkMode(d->hDC, TRANSPARENT);
             SetTextColor(d->hDC, cr_txt());
-            /* иконка (Segoe MDL2 Assets): Картинки, Аккаунт, Дополнительно */
-            const WCHAR *icons[4] = { L"\uE8B9", L"\uE77B", L"\uE713", L"\uE946" };
-            if (g_set_font_icon && (int)d->itemID < 4) {
+            /* иконки (Segoe MDL2 Assets): Картинки, Аккаунт, Дополнительно, Обновления, About */
+            const WCHAR *icons[5] = { L"\uE8B9", L"\uE77B", L"\uE713", L"\uE895", L"\uE946" };
+            if (g_set_font_icon && (int)d->itemID < 5) {
                 HFONT of = (HFONT)SelectObject(d->hDC, g_set_font_icon);
                 RECT ir = d->rcItem; ir.left += 16;
                 DrawTextW(d->hDC, icons[d->itemID], -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -2878,7 +2941,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_LBUTTONUP: {
-        if (g_set_page == 3) {
+        if (g_set_page == 4) {
             POINT pt = { (short)LOWORD(lp), (short)HIWORD(lp) };
             if (PtInRect(&g_github_rect, pt)) {
                 ShellExecuteW(h, L"open", REPO_URL, NULL, NULL, SW_SHOWNORMAL);
@@ -2888,7 +2951,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         break;
     }
     case WM_SETCURSOR: {
-        if (g_set_page == 3 && (HWND)wp == h) {
+        if (g_set_page == 4 && (HWND)wp == h) {
             POINT pt; GetCursorPos(&pt); ScreenToClient(h, &pt);
             if (PtInRect(&g_github_rect, pt)) {
                 SetCursor(LoadCursorW(NULL, IDC_HAND));
@@ -3020,6 +3083,18 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             reg_set_str(L"domain", g_cfg.domain_pref);
             LOG_INFO(T("Предпочтение домена: %s", "Domain preference: %s"), g_cfg.domain_pref);
         }
+        else if (id == IDC_CHK_STARTUP && code == BN_CLICKED) {
+            g_cfg.check_on_startup = (int)SendMessageW(ctl, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            reg_set_dword(L"check_on_startup", g_cfg.check_on_startup);
+        }
+        else if (id == IDC_CHK_AUTOUPD && code == BN_CLICKED) {
+            g_cfg.auto_update = (int)SendMessageW(ctl, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            reg_set_dword(L"auto_update", g_cfg.auto_update);
+        }
+        else if (id == IDC_CHK_UPDNOTIFY && code == BN_CLICKED) {
+            g_cfg.update_notify = (int)SendMessageW(ctl, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            reg_set_dword(L"update_notify", g_cfg.update_notify);
+        }
         else if (id == IDC_CB_UPDINT && code == CBN_SELCHANGE) {
             int s = (int)SendMessageW(ctl, CB_GETCURSEL, 0, 0);
             g_cfg.update_interval_min = (int)SendMessageW(ctl, CB_GETITEMDATA, s, 0);
@@ -3043,7 +3118,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             settings_relaunch();
         }
         else if (id == IDC_BTN_UPDATE && code == BN_CLICKED) {
-            run_update_async(0);
+            run_update_async(0, 1);   /* ручная проверка — сразу ставим, если есть */
         }
         else if (id == IDC_BTN_CLOSE && code == BN_CLICKED) {
             DestroyWindow(h);
@@ -3056,11 +3131,17 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_UPDATERESULT: {
         g_update_status = (int)wp;
         HWND st = GetDlgItem(h, IDC_ST_UPDATE);
+        WCHAR avail[128];
+        if (g_new_version[0])
+            _snwprintf(avail, 128, TW(L"Доступна новая версия %ls.", L"New version %ls available."), g_new_version);
+        else
+            wcscpy(avail, TW(L"Доступна новая версия.", L"A new version is available."));
         const WCHAR *txt =
             g_update_status == 1 ? TW(L"Проверяю обновления…", L"Checking for updates…") :
             g_update_status == 2 ? TW(L"У вас последняя версия.", L"You have the latest version.") :
             g_update_status == 3 ? TW(L"Найдено обновление, устанавливаю…", L"Update found, installing…") :
-            g_update_status == 4 ? TW(L"Не удалось проверить (сайт недоступен?).", L"Check failed (site unavailable?).") : L"";
+            g_update_status == 4 ? TW(L"Не удалось проверить (сайт недоступен?).", L"Check failed (site unavailable?).") :
+            g_update_status == 5 ? avail : L"";
         SetWindowTextW(st, txt);
         InvalidateRect(st, NULL, TRUE);
         return 0;
@@ -3127,6 +3208,7 @@ static void open_settings(void)
     SendMessageW(nav, LB_ADDSTRING, 0, (LPARAM)TW(L"Картинки", L"Images"));
     SendMessageW(nav, LB_ADDSTRING, 0, (LPARAM)TW(L"Аккаунт", L"Account"));
     SendMessageW(nav, LB_ADDSTRING, 0, (LPARAM)TW(L"Дополнительно", L"Additional"));
+    SendMessageW(nav, LB_ADDSTRING, 0, (LPARAM)TW(L"Обновления", L"Updates"));
     SendMessageW(nav, LB_ADDSTRING, 0, (LPARAM)TW(L"О приложении", L"About"));
     SendMessageW(nav, LB_SETCURSEL, 0, 0);
 
@@ -3261,9 +3343,18 @@ static void open_settings(void)
     HWND cbTh = mk(h, L"COMBOBOX", NULL, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, VX, y, VW, 120, IDC_CB_APPTHEME, 2);
     cb_add(cbTh, TW(L"Светлая", L"Light"), 0); cb_add(cbTh, TW(L"Тёмная", L"Dark"), 1);
     SendMessageW(cbTh, CB_SETCURSEL, g_ui_theme == THEME_DARK ? 1 : 0, 0);
-    y += 34;
-    mk(h, L"STATIC", TW(L"Автопроверка", L"Auto-update"), SS_LEFT, CX, y+4, 110, 20, 0, 2);
-    HWND cbUpd = mk(h, L"COMBOBOX", NULL, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, VX, y, VW, 160, IDC_CB_UPDINT, 2);
+
+    SendMessageW(GetDlgItem(h, IDC_CHK_NOTIFY),  BM_SETCHECK, g_cfg.notify ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(GetDlgItem(h, IDC_CHK_AUTORUN), BM_SETCHECK, autostart_enabled() ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    /* ---- страница 3: Обновления ---- */
+    y = 46;
+    { WCHAR vv[64]; _snwprintf(vv, 64, TW(L"Текущая версия: %hs", L"Current version: %hs"), APP_VERSION);
+      HWND vlbl = mk(h, L"STATIC", vv, SS_LEFT, CX, y, 360, 24, 0, 3);
+      SendMessageW(vlbl, WM_SETFONT, (WPARAM)g_set_font_title, TRUE); }
+    y += 40;
+    mk(h, L"STATIC", TW(L"Автопроверка", L"Auto-check"), SS_LEFT, CX, y+4, 110, 20, 0, 3);
+    HWND cbUpd = mk(h, L"COMBOBOX", NULL, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, VX, y, VW, 160, IDC_CB_UPDINT, 3);
     cb_add(cbUpd, TW(L"Выключена", L"Off"), 0);
     cb_add(cbUpd, TW(L"Раз в час", L"Hourly"), 60);
     cb_add(cbUpd, TW(L"Раз в день", L"Daily"), 1440);
@@ -3272,14 +3363,24 @@ static void open_settings(void)
       if (uv == 60) si = 1; else if (uv == 1440) si = 2; else if (uv == 10080) si = 3;
       SendMessageW(cbUpd, CB_SETCURSEL, si, 0); }
     y += 36;
+    mk(h, L"BUTTON", TW(L"Проверять при запуске", L"Check on startup"),
+       WS_TABSTOP | BS_AUTOCHECKBOX, CX, y, 360, 22, IDC_CHK_STARTUP, 3);
+    y += 28;
+    mk(h, L"BUTTON", TW(L"Автоматически устанавливать", L"Install automatically"),
+       WS_TABSTOP | BS_AUTOCHECKBOX, CX, y, 360, 22, IDC_CHK_AUTOUPD, 3);
+    y += 28;
+    mk(h, L"BUTTON", TW(L"Уведомлять о новых версиях", L"Notify about new versions"),
+       WS_TABSTOP | BS_AUTOCHECKBOX, CX, y, 360, 22, IDC_CHK_UPDNOTIFY, 3);
+    y += 34;
     mk(h, L"BUTTON", TW(L"Проверить обновления", L"Check for updates"),
-       WS_TABSTOP | BS_OWNERDRAW, VX, y, 200, 28, IDC_BTN_UPDATE, 2);
-    mk(h, L"STATIC", L"", SS_LEFT, VX, y + 32, 250, 34, IDC_ST_UPDATE, 2);
+       WS_TABSTOP | BS_OWNERDRAW, CX, y, 200, 28, IDC_BTN_UPDATE, 3);
+    mk(h, L"STATIC", L"", SS_LEFT, CX, y + 32, 360, 34, IDC_ST_UPDATE, 3);
 
-    SendMessageW(GetDlgItem(h, IDC_CHK_NOTIFY),  BM_SETCHECK, g_cfg.notify ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessageW(GetDlgItem(h, IDC_CHK_AUTORUN), BM_SETCHECK, autostart_enabled() ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(GetDlgItem(h, IDC_CHK_STARTUP),   BM_SETCHECK, g_cfg.check_on_startup ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(GetDlgItem(h, IDC_CHK_AUTOUPD),   BM_SETCHECK, g_cfg.auto_update ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(GetDlgItem(h, IDC_CHK_UPDNOTIFY), BM_SETCHECK, g_cfg.update_notify ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    /* ---- страница 3: О приложении — текст рисуется в WM_PAINT (перенос по словам) ---- */
+    /* ---- страница 4: О приложении — текст рисуется в WM_PAINT (перенос по словам) ---- */
 
     mk(h, L"BUTTON", TW(L"Закрыть", L"Close"), WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
        464, 360, 100, 28, IDC_BTN_CLOSE, -1);
@@ -3438,7 +3539,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_TIMER:
         if (wp == TIMER_ID && !g_paused) run_async(IDM_UPDATE);
-        else if (wp == UPD_TIMER_ID) run_update_async(1);   /* тихая автопроверка */
+        else if (wp == UPD_TIMER_ID) run_update_async(1, g_cfg.auto_update); /* тихая автопроверка */
         return 0;
     case WM_COMMAND: {
         int id = LOWORD(wp);
@@ -3523,6 +3624,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdline, int show)
     tray_add();
     apply_interval();
     apply_update_interval();
+    if (g_cfg.check_on_startup)
+        run_update_async(1, g_cfg.auto_update);   /* тихая проверка при запуске */
     /* синхронизация избранного + первая смена — в фоне, чтобы трей появился сразу */
     { HANDLE h = CreateThread(NULL, 0, startup_thread, NULL, 0, NULL); if (h) CloseHandle(h); }
 
