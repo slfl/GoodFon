@@ -86,6 +86,7 @@ static void theme_brushes_rebuild(void)
 
 /* Пункты меню */
 #define IDM_UPDATE      100
+#define IDM_OPENSITE    107   /* открыть страницу текущей картинки на сайте */
 #define IDM_BACK        106   /* вернуть предыдущие обои из истории */
 #define IDM_FAVORITE        101
 #define IDM_UNFAVORITE      102
@@ -235,6 +236,8 @@ typedef struct {
 static Config g_cfg;
 static WCHAR  g_favorite_dir[MAX_PATH];
 static WCHAR  g_current_image[MAX_PATH];  /* точный файл, который сейчас на экране */
+static char   g_cur_page_url[600] = "";   /* URL страницы текущей картинки на сайте */
+static void page_url_for_file(const WCHAR *file, char *out, size_t sz); /* fwd */
 
 /* История обоев для кнопки «назад» (браузерная логика: новая смена берёт
  * свежую картинку и обрезает «вперёд», back идёт по показанным ранее). */
@@ -1068,6 +1071,7 @@ static int set_wallpaper(const WCHAR *path)
         LOG_INFO(T("Обои выставлены: %s", "Wallpaper set: %s"), p8);
         wcsncpy(g_current_image, path, MAX_PATH - 1);  /* фиксируем текущую картинку */
         g_current_image[MAX_PATH - 1] = 0;
+        page_url_for_file(path, g_cur_page_url, sizeof(g_cur_page_url)); /* ссылка по умолчанию */
         if (!g_from_history) history_push(path);       /* обычная смена — в историю */
     }
     else    LOG_ERROR(T("Обои НЕ выставлены: %s", "Wallpaper NOT set: %s"), p8);
@@ -1598,7 +1602,7 @@ static int set_wallpaper_from_favorite(void)
 
 /* Скачать одну случайную картинку под разрешение (tw x th; 0,0 = оригинал),
  * сохранить путь в out. Возврат: 1 = ок, 0 = не нашли, -1 = квота. */
-static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz)
+static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz, char *page_out, int page_sz)
 {
     const int IMG_BUDGET = 40;
     int max_pages = 0, images_tried = 0, net_fails = 0;
@@ -1658,6 +1662,7 @@ static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz)
             free(data);
             if (!sok) continue;
             wcsncpy(out, saved, outsz - 1); out[outsz - 1] = 0;
+            if (page_out && page_sz > 0) { strncpy(page_out, image_page, page_sz - 1); page_out[page_sz - 1] = 0; }
             LOG_INFO(T("Найдено за %d проверок.", "Found after %d checks."), images_tried);
             return 1;
         }
@@ -1690,7 +1695,8 @@ static void do_update(void)
     int tw = 0, th = 0;
     if (_stricmp(g_cfg.resolution, "original") != 0) sscanf(g_cfg.resolution, "%dx%d", &tw, &th);
     WCHAR saved[MAX_PATH];
-    int fr = fetch_one_wallpaper(tw, th, saved, MAX_PATH);
+    char pageu[600] = "";
+    int fr = fetch_one_wallpaper(tw, th, saved, MAX_PATH, pageu, sizeof(pageu));
     if (fr == -1) {
         notify_user(TW(L"GoodFon: лимит исчерпан", L"GoodFon: limit reached"), TW(L"Загружаем из избранного.", L"Loading from favorites."));
         fallback_local(1); return;
@@ -1701,6 +1707,7 @@ static void do_update(void)
     }
     cleanup_old_images();
     set_wallpaper(saved);
+    if (pageu[0]) { strncpy(g_cur_page_url, pageu, sizeof(g_cur_page_url) - 1); g_cur_page_url[sizeof(g_cur_page_url)-1] = 0; } /* точная ссылка */
     WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(saved));
     notify_user(TW(L"Обои обновлены — с сайта", L"Wallpaper updated — from site"), info);
 }
@@ -3461,44 +3468,84 @@ static void open_settings(void)
     UpdateWindow(h);
 }
 
-/* ---- Тёмное меню трея (owner-draw). В светлой теме — обычные пункты. ---- */
-typedef struct { const WCHAR *text; int checked; int disabled; int sep; } GfMenuItem;
+/* ---- Меню трея (owner-draw): иконки слева, скруглённая подсветка,
+   верхняя карточка текущей картинки (открывает страницу на сайте). ---- */
+typedef struct {
+    const WCHAR *text;      /* подпись пункта / имя картинки для карточки */
+    const WCHAR *icon;      /* глиф Segoe MDL2 Assets слева */
+    const WCHAR *sub;       /* подзаголовок (только карточка) */
+    int checked;
+    int disabled;
+    int sep;
+    int card;               /* 1 = верхняя карточка «текущая картинка» */
+} GfMenuItem;
 static GfMenuItem g_mi[24];
 static int   g_min = 0;
-static HFONT g_menu_font = NULL;
+static HFONT g_menu_font = NULL, g_menu_icon = NULL, g_menu_sub = NULL;
+static WCHAR g_card_name[128];   /* имя текущей картинки для карточки */
+static WCHAR g_card_sub[160];    /* «тема: … · открыть на сайте» */
 
-static void menu_add(HMENU m, const WCHAR *txt, UINT id, int checked, int disabled)
+static void menu_add(HMENU m, const WCHAR *icon, const WCHAR *txt, UINT id, int checked, int disabled)
 {
-    g_mi[g_min].text = txt; g_mi[g_min].checked = checked;
-    g_mi[g_min].disabled = disabled; g_mi[g_min].sep = 0;
-    AppendMenuW(m, MF_OWNERDRAW | (disabled ? MF_GRAYED : 0), id, (LPCWSTR)&g_mi[g_min]);
+    GfMenuItem *it = &g_mi[g_min];
+    it->text = txt; it->icon = icon; it->sub = NULL;
+    it->checked = checked; it->disabled = disabled; it->sep = 0; it->card = 0;
+    AppendMenuW(m, MF_OWNERDRAW | (disabled ? MF_GRAYED : 0), id, (LPCWSTR)it);
     g_min++;
 }
 static void menu_sep(HMENU m)
 {
-    g_mi[g_min].text = NULL; g_mi[g_min].checked = 0;
-    g_mi[g_min].disabled = 1; g_mi[g_min].sep = 1;
-    AppendMenuW(m, MF_OWNERDRAW | MF_GRAYED, 0xF000 + g_min, (LPCWSTR)&g_mi[g_min]);
+    GfMenuItem *it = &g_mi[g_min];
+    ZeroMemory(it, sizeof(*it));
+    it->disabled = 1; it->sep = 1;
+    AppendMenuW(m, MF_OWNERDRAW | MF_GRAYED, 0xF000 + g_min, (LPCWSTR)it);
+    g_min++;
+}
+static void menu_add_card(HMENU m, const WCHAR *name, const WCHAR *sub, UINT id, int disabled)
+{
+    GfMenuItem *it = &g_mi[g_min];
+    it->text = name; it->icon = L"\uE91B"; it->sub = sub;   /* Photo */
+    it->checked = 0; it->disabled = disabled; it->sep = 0; it->card = 1;
+    AppendMenuW(m, MF_OWNERDRAW | (disabled ? MF_GRAYED : 0), id, (LPCWSTR)it);
     g_min++;
 }
 
 static void show_menu(void)
 {
-    if (!g_menu_font)
-        g_menu_font = CreateFontW(-12, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+    if (!g_menu_font) {
+        g_menu_font = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                                   0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        g_menu_sub  = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                  0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        g_menu_icon = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                  0, 0, CLEARTYPE_QUALITY, 0, L"Segoe MDL2 Assets");
+    }
+
+    /* карточка текущей картинки: имя без расширения + тема */
+    int have_cur = g_current_image[0] && GetFileAttributesW(g_current_image) != INVALID_FILE_ATTRIBUTES;
+    if (have_cur) {
+        wcsncpy(g_card_name, PathFindFileNameW(g_current_image), 127); g_card_name[127] = 0;
+        PathRemoveExtensionW(g_card_name);
+        WCHAR wtheme[64]; utf8_to_wide(g_cfg.theme, wtheme, 64);
+        _snwprintf(g_card_sub, 160, TW(L"тема: %s · открыть на сайте", L"theme: %s · open on site"), wtheme);
+    } else {
+        wcscpy(g_card_name, TW(L"Обои ещё не выбраны", L"No wallpaper yet"));
+        wcscpy(g_card_sub,  TW(L"сменить обои сейчас", L"change wallpaper now"));
+    }
+
     g_min = 0;
     HMENU m = CreatePopupMenu();
-    menu_add(m, TW(L"Сменить обои сейчас", L"Change wallpaper now"), IDM_UPDATE, 0, 0);
-    menu_add(m, TW(L"Вернуть прошлые обои", L"Restore previous wallpaper"), IDM_BACK,
-             0, g_hist_cur <= 0);
-    menu_add(m, TW(L"Добавить в избранное ♥", L"Add to favorites ♥"), IDM_FAVORITE, 0, 0);
-    menu_add(m, TW(L"Убрать из избранного ♡", L"Remove from favorites ♡"), IDM_UNFAVORITE, 0, 0);
+    menu_add_card(m, g_card_name, g_card_sub, IDM_OPENSITE, !have_cur);
     menu_sep(m);
-    menu_add(m, TW(L"Пауза", L"Pause"), IDM_PAUSE, g_paused, 0);
-    menu_add(m, TW(L"Настройки", L"Settings"), IDM_SETTINGS, 0, 0);
+    menu_add(m, L"\uE72C", TW(L"Сменить обои сейчас", L"Change wallpaper now"), IDM_UPDATE, 0, 0);
+    menu_add(m, L"\uE7A7", TW(L"Вернуть прошлые обои", L"Restore previous wallpaper"), IDM_BACK, 0, g_hist_cur <= 0);
+    menu_add(m, L"\uE734", TW(L"Добавить в избранное", L"Add to favorites"), IDM_FAVORITE, 0, 0);
+    menu_add(m, L"\uE735", TW(L"Убрать из избранного", L"Remove from favorites"), IDM_UNFAVORITE, 0, 0);
     menu_sep(m);
-    menu_add(m, TW(L"Выход", L"Exit"), IDM_EXIT, 0, 0);
+    menu_add(m, g_paused ? L"\uE768" : L"\uE769", TW(L"Пауза", L"Pause"), IDM_PAUSE, g_paused, 0);
+    menu_add(m, L"\uE713", TW(L"Настройки", L"Settings"), IDM_SETTINGS, 0, 0);
+    menu_sep(m);
+    menu_add(m, L"\uE711", TW(L"Выход", L"Exit"), IDM_EXIT, 0, 0);
 
     HBRUSH menubg = CreateSolidBrush(cr_bg());
     { MENUINFO mif; ZeroMemory(&mif, sizeof(mif));
@@ -3551,12 +3598,24 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         LPMEASUREITEMSTRUCT mis = (LPMEASUREITEMSTRUCT)lp;
         if (mis->CtlType == ODT_MENU) {
             GfMenuItem *it = (GfMenuItem *)mis->itemData;
-            if (it && it->sep) { mis->itemHeight = 8; mis->itemWidth = 10; }
+            if (it && it->sep) { mis->itemHeight = 9; mis->itemWidth = 10; }
+            else if (it && it->card) {
+                HDC dc = GetDC(h);
+                HFONT of = (HFONT)SelectObject(dc, g_menu_font);
+                SIZE s1; GetTextExtentPoint32W(dc, it->text, lstrlenW(it->text), &s1);
+                SelectObject(dc, g_menu_sub);
+                SIZE s2; GetTextExtentPoint32W(dc, it->sub, lstrlenW(it->sub), &s2);
+                SelectObject(dc, of); ReleaseDC(h, dc);
+                int tw = (s1.cx > s2.cx ? s1.cx : s2.cx);
+                if (tw > 240) tw = 240;          /* длинное имя обрежется по «…» */
+                mis->itemWidth = tw + 44 + 26;   /* иконка слева + текст + стрелка справа */
+                mis->itemHeight = 48;
+            }
             else if (it) {
                 HDC dc = GetDC(h); HFONT of = (HFONT)SelectObject(dc, g_menu_font);
                 SIZE sz; GetTextExtentPoint32W(dc, it->text, lstrlenW(it->text), &sz);
                 SelectObject(dc, of); ReleaseDC(h, dc);
-                mis->itemWidth = sz.cx + 44; mis->itemHeight = 26;
+                mis->itemWidth = sz.cx + 46; mis->itemHeight = 30;
             }
             return TRUE;
         }
@@ -3566,30 +3625,85 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         LPDRAWITEMSTRUCT d = (LPDRAWITEMSTRUCT)lp;
         if (d->CtlType == ODT_MENU) {
             GfMenuItem *it = (GfMenuItem *)d->itemData;
-            COLORREF bg = (d->itemState & ODS_SELECTED) ? cr_sel() : cr_bg();
-            HBRUSH bb = CreateSolidBrush(bg); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
+            int sel = (d->itemState & ODS_SELECTED) != 0;
+
+            /* фон всего пункта — цвет меню */
+            HBRUSH bb = CreateSolidBrush(cr_bg()); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
+
             if (it && it->sep) {
                 HPEN pn = CreatePen(PS_SOLID, 1, cr_border());
                 HGDIOBJ op = SelectObject(d->hDC, pn);
                 int my = (d->rcItem.top + d->rcItem.bottom) / 2;
-                MoveToEx(d->hDC, d->rcItem.left + 8, my, NULL);
-                LineTo(d->hDC, d->rcItem.right - 8, my);
+                MoveToEx(d->hDC, d->rcItem.left + 10, my, NULL);
+                LineTo(d->hDC, d->rcItem.right - 10, my);
                 SelectObject(d->hDC, op); DeleteObject(pn);
                 return TRUE;
             }
-            if (it) {
-                HFONT of = (HFONT)SelectObject(d->hDC, g_menu_font);
-                SetBkMode(d->hDC, TRANSPARENT);
-                SetTextColor(d->hDC, it->disabled ? (g_ui_theme ? RGB(140,140,140) : RGB(120,120,120))
-                                                  : cr_txt());
-                if (it->checked) {
-                    RECT ck = d->rcItem; ck.left += 8;
-                    DrawTextW(d->hDC, L"\u2713", -1, &ck, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                }
-                RECT tr = d->rcItem; tr.left += 30;
-                DrawTextW(d->hDC, it->text, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(d->hDC, of);
+            if (!it) return TRUE;
+
+            SetBkMode(d->hDC, TRANSPARENT);
+            RECT r = d->rcItem;
+
+            if (it->card) {
+                /* Карточка текущей картинки: скруглённая акцентная плашка */
+                COLORREF cardbg = g_ui_theme ? (sel ? RGB(48,66,88)  : RGB(38,54,72))
+                                             : (sel ? RGB(208,228,248): RGB(224,238,251));
+                COLORREF nameC  = g_ui_theme ? RGB(120,180,248) : RGB(0,95,175);
+                COLORREF subC   = g_ui_theme ? RGB(150,165,180) : RGB(95,115,135);
+                if (it->disabled) { nameC = g_ui_theme ? RGB(150,150,150) : RGB(120,120,120); subC = nameC; }
+                RECT c = r; c.left += 5; c.right -= 5; c.top += 3; c.bottom -= 3;
+                HBRUSH fb = CreateSolidBrush(cardbg);
+                HPEN   fp = CreatePen(PS_SOLID, 1, cardbg);
+                HGDIOBJ ob = SelectObject(d->hDC, fb), op = SelectObject(d->hDC, fp);
+                RoundRect(d->hDC, c.left, c.top, c.right, c.bottom, 10, 10);
+                SelectObject(d->hDC, ob); SelectObject(d->hDC, op); DeleteObject(fb); DeleteObject(fp);
+                /* иконка-фото слева */
+                HFONT oi = (HFONT)SelectObject(d->hDC, g_menu_icon);
+                SetTextColor(d->hDC, nameC);
+                RECT ir = c; ir.left += 12;
+                DrawTextW(d->hDC, it->icon, -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                /* стрелка «открыть» справа */
+                RECT ar = c; ar.right -= 12;
+                DrawTextW(d->hDC, L"\uE8A7", -1, &ar, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(d->hDC, oi);
+                /* имя (строка 1) */
+                HFONT ofn = (HFONT)SelectObject(d->hDC, g_menu_font);
+                RECT nr = c; nr.left += 42; nr.right -= 28; nr.bottom = (c.top + c.bottom) / 2 + 2;
+                SetTextColor(d->hDC, nameC);
+                DrawTextW(d->hDC, it->text, -1, &nr, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+                /* подзаголовок (строка 2) */
+                SelectObject(d->hDC, g_menu_sub);
+                RECT sr = c; sr.left += 42; sr.right -= 28; sr.top = (c.top + c.bottom) / 2 + 1;
+                SetTextColor(d->hDC, subC);
+                DrawTextW(d->hDC, it->sub, -1, &sr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+                SelectObject(d->hDC, ofn);
+                return TRUE;
             }
+
+            /* обычный пункт: скруглённая подсветка при наведении */
+            if (sel) {
+                RECT hR = r; hR.left += 4; hR.right -= 4; hR.top += 1; hR.bottom -= 1;
+                HBRUSH sb = CreateSolidBrush(cr_sel());
+                HPEN   sp = CreatePen(PS_SOLID, 1, cr_sel());
+                HGDIOBJ ob = SelectObject(d->hDC, sb), op = SelectObject(d->hDC, sp);
+                RoundRect(d->hDC, hR.left, hR.top, hR.right, hR.bottom, 7, 7);
+                SelectObject(d->hDC, ob); SelectObject(d->hDC, op); DeleteObject(sb); DeleteObject(sp);
+            }
+            COLORREF fg = it->disabled ? (g_ui_theme ? RGB(140,140,140) : RGB(160,160,160)) : cr_txt();
+            /* иконка слева */
+            if (it->icon) {
+                HFONT oi = (HFONT)SelectObject(d->hDC, g_menu_icon);
+                SetTextColor(d->hDC, fg);
+                RECT ir = r; ir.left += 13;
+                DrawTextW(d->hDC, it->icon, -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(d->hDC, oi);
+            }
+            /* подпись */
+            HFONT of = (HFONT)SelectObject(d->hDC, g_menu_font);
+            SetTextColor(d->hDC, fg);
+            RECT tr = r; tr.left += 42;
+            DrawTextW(d->hDC, it->text, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(d->hDC, of);
             return TRUE;
         }
         break;
@@ -3611,6 +3725,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         int id = LOWORD(wp);
         if (id == IDM_UPDATE || id == IDM_BACK || id == IDM_FAVORITE || id == IDM_UNFAVORITE)
             run_async(id);
+        else if (id == IDM_OPENSITE) {
+            char url[600] = "";
+            if (g_cur_page_url[0]) strcpy(url, g_cur_page_url);
+            else if (g_current_image[0]) page_url_for_file(g_current_image, url, sizeof(url));
+            if (url[0]) {
+                WCHAR wurl[600]; utf8_to_wide(url, wurl, 600);
+                ShellExecuteW(NULL, L"open", wurl, NULL, NULL, SW_SHOWNORMAL);
+                LOG_INFO(T("Открываю страницу картинки: %s", "Opening image page: %s"), url);
+            }
+        }
         else if (id == IDM_PAUSE) { g_paused = !g_paused; apply_interval(); }
         else if (id == IDM_SETTINGS) open_settings();
         else if (id == IDM_EXIT) DestroyWindow(h);
