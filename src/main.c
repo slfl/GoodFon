@@ -3604,10 +3604,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdline, int show)
     g_hinst = hInst;
     srand(GetTickCount());
 
-    /* Разбор аргументов: -debug включает логи; update/favorite/unfavorite — разовый режим.
-     * Порядок и наличие дефиса не важны: "GoodFon.exe update -debug" тоже ок.   */
+    /* Единственный аргумент — скрытый -debug: включает подробное логирование.
+     * Порядок и наличие дефиса не важны ("GoodFon.exe debug" тоже ок). */
     int debug = 0;
-    WCHAR cmd[32] = L"";
     int argc = 0;
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 1; i < argc; i++) {
@@ -3615,8 +3614,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdline, int show)
         CharLowerW(a);
         WCHAR *p = a; while (*p == L'-') p++;
         if (!wcscmp(p, L"debug")) debug = 1;
-        else if (!wcscmp(p, L"update") || !wcscmp(p, L"favorite") || !wcscmp(p, L"unfavorite"))
-            wcsncpy(cmd, p, 31);
     }
     LocalFree(argv);
 
@@ -3639,14 +3636,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdline, int show)
     if (!http_init()) {
         LOG_ERROR(T("WinHTTP не инициализирован.", "WinHTTP not initialized."));
         return 1;
-    }
-
-    /* CLI-режим: update / favorite / unfavorite — разово и выйти */
-    if (cmd[0]) {
-        if (!wcscmp(cmd, L"update")) do_update();
-        else if (!wcscmp(cmd, L"favorite"))   do_favorite();
-        else if (!wcscmp(cmd, L"unfavorite")) do_unfavorite();
-        return 0;
     }
 
     /* Трей-режим */
