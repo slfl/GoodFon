@@ -35,6 +35,10 @@
 #include <time.h>
 #include "resource.h"
 
+/* winmm: точность системного таймера для плавной анимации меню */
+__declspec(dllimport) UINT __stdcall timeBeginPeriod(UINT);
+__declspec(dllimport) UINT __stdcall timeEndPeriod(UINT);
+
 /* ================= Константы ================= */
 
 #define APP_NAME        L"GoodFon"
@@ -3486,15 +3490,18 @@ static WCHAR g_card_name[128];   /* имя текущей картинки дл�
 static WCHAR g_card_sub[160];    /* «тема: … · открыть на сайте» */
 
 /* Бегущая строка имени в карточке + фиксированная ширина меню */
-#define CARD_W          272      /* фикс. ширина меню (по карточке) */
+#define CARD_W          236      /* фикс. ширина меню (по карточке) */
 #define MARQUEE_GAP     46       /* зазор между копиями бегущего текста */
 #define MARQUEE_TIMER_ID 3
+#define MARQUEE_HOLD_MS 900      /* пауза в начале/на стыке цикла, мс */
 static HWND  g_menu_hwnd = NULL; /* окно popup-меню (#32768) */
 static RECT  g_card_rect;        /* прямоугольник карточки в координатах окна меню */
 static int   g_marquee_off = 0;  /* сдвиг бегущей строки, px */
 static int   g_marquee_tw = 0;   /* ширина имени, px */
 static int   g_card_scroll = 0;  /* 1 = имя не влезает, крутим */
-static int   g_marquee_hold = 0; /* пауза (в тиках) перед прокруткой */
+static DWORD g_marquee_start = 0;/* момент старта прокрутки (GetTickCount) */
+static GfMenuItem *g_card_it = NULL; /* элемент-карточка (для перерисовки по таймеру) */
+static int   g_card_sel = 0;     /* карточка сейчас под курсором */
 
 static void menu_add(HMENU m, const WCHAR *icon, const WCHAR *txt, UINT id, int checked, int disabled)
 {
@@ -3517,6 +3524,7 @@ static void menu_add_card(HMENU m, const WCHAR *name, const WCHAR *sub, UINT id,
     GfMenuItem *it = &g_mi[g_min];
     it->text = name; it->icon = L"\uE91B"; it->sub = sub;   /* Photo */
     it->checked = 0; it->disabled = disabled; it->sep = 0; it->card = 1;
+    g_card_it = it;
     AppendMenuW(m, MF_OWNERDRAW | (disabled ? MF_GRAYED : 0), id, (LPCWSTR)it);
     g_min++;
 }
@@ -3565,7 +3573,7 @@ static void show_menu(void)
     }
 
     /* нужна ли бегущая строка: имя шире области карточки */
-    g_marquee_off = 0; g_marquee_hold = 22; g_menu_hwnd = NULL;
+    g_marquee_off = 0; g_marquee_start = GetTickCount(); g_menu_hwnd = NULL;
     {
         HDC dc = GetDC(g_hwnd); HFONT of = (HFONT)SelectObject(dc, g_menu_font);
         SIZE ns; GetTextExtentPoint32W(dc, g_card_name, lstrlenW(g_card_name), &ns);
@@ -3600,9 +3608,10 @@ static void show_menu(void)
     HWINEVENTHOOK eh = SetWinEventHook(EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPSTART,
                                        NULL, menu_popup_evt, GetCurrentProcessId(), 0,
                                        WINEVENT_OUTOFCONTEXT);
-    if (g_card_scroll) SetTimer(g_hwnd, MARQUEE_TIMER_ID, 33, NULL);   /* ~30 fps */
+    if (g_card_scroll) { timeBeginPeriod(1); SetTimer(g_hwnd, MARQUEE_TIMER_ID, 15, NULL); } /* ~60 fps, позиция по времени */
     TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_hwnd, NULL);
     KillTimer(g_hwnd, MARQUEE_TIMER_ID);
+    if (g_card_scroll) timeEndPeriod(1);
     g_menu_hwnd = NULL;
     if (eh) UnhookWinEvent(eh);
     DestroyMenu(m);
@@ -3637,6 +3646,71 @@ static void select_theme(int idx)
     PathAppendW(g_favorite_dir, L"Favorite");
     PathAppendW(g_favorite_dir, wtheme);
     LOG_INFO(T("Активная тема: %s (сменится по таймеру или вручную)", "Active theme: %s (will change on timer or manually)"), g_cfg.theme);
+}
+
+/* Отрисовка карточки в буфер и один BitBlt на dst (без мерцания).
+   Используется и в WM_DRAWITEM, и в таймере анимации (прямо в DC меню). */
+static void draw_card(HDC dst, RECT r, int sel)
+{
+    GfMenuItem *it = g_card_it;
+    if (!it) return;
+    int W = r.right - r.left, H = r.bottom - r.top;
+    if (W <= 0 || H <= 0) return;
+
+    HDC mdc = CreateCompatibleDC(dst);
+    HBITMAP mbm = CreateCompatibleBitmap(dst, W, H);
+    HGDIOBJ omb = SelectObject(mdc, mbm);
+    SetBkMode(mdc, TRANSPARENT);
+    RECT full = {0, 0, W, H};
+    HBRUSH bg2 = CreateSolidBrush(cr_bg()); FillRect(mdc, &full, bg2); DeleteObject(bg2);
+
+    COLORREF cardbg = g_ui_theme ? (sel ? RGB(48,66,88)  : RGB(38,54,72))
+                                 : (sel ? RGB(208,228,248): RGB(224,238,251));
+    COLORREF nameC  = g_ui_theme ? RGB(120,180,248) : RGB(0,95,175);
+    COLORREF subC   = g_ui_theme ? RGB(150,165,180) : RGB(95,115,135);
+    if (it->disabled) { nameC = g_ui_theme ? RGB(150,150,150) : RGB(120,120,120); subC = nameC; }
+
+    RECT c = {5, 3, W - 5, H - 3};
+    HBRUSH fb = CreateSolidBrush(cardbg);
+    HPEN   fp = CreatePen(PS_SOLID, 1, cardbg);
+    HGDIOBJ ob = SelectObject(mdc, fb), op = SelectObject(mdc, fp);
+    RoundRect(mdc, c.left, c.top, c.right, c.bottom, 10, 10);
+    SelectObject(mdc, ob); SelectObject(mdc, op); DeleteObject(fb); DeleteObject(fp);
+
+    HFONT oi = (HFONT)SelectObject(mdc, g_menu_icon);
+    SetTextColor(mdc, nameC);
+    RECT ir = c; ir.left += 12;
+    DrawTextW(mdc, it->icon, -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT ar = c; ar.right -= 12;
+    DrawTextW(mdc, L"\uE8A7", -1, &ar, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(mdc, oi);
+
+    HFONT ofn = (HFONT)SelectObject(mdc, g_menu_font);
+    SetTextColor(mdc, nameC);
+    int nx = c.left + 42, nRight = c.right - 28;
+    int nBottom = (c.top + c.bottom) / 2 + 2;
+    RECT nr = {nx, c.top, nRight, nBottom};
+    if (g_card_scroll && !it->disabled) {
+        HRGN clip = CreateRectRgn(nx, c.top, nRight, nBottom + 1);
+        SelectClipRgn(mdc, clip);
+        int x1 = nx - g_marquee_off;
+        RECT t1 = {x1, c.top, x1 + g_marquee_tw + 10, nBottom};
+        DrawTextW(mdc, it->text, -1, &t1, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
+        int x2 = x1 + g_marquee_tw + MARQUEE_GAP;
+        RECT t2 = {x2, c.top, x2 + g_marquee_tw + 10, nBottom};
+        DrawTextW(mdc, it->text, -1, &t2, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
+        SelectClipRgn(mdc, NULL); DeleteObject(clip);
+    } else {
+        DrawTextW(mdc, it->text, -1, &nr, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    SelectObject(mdc, g_menu_sub);
+    RECT sr = {nx, (c.top + c.bottom) / 2 + 1, nRight, c.bottom};
+    SetTextColor(mdc, subC);
+    DrawTextW(mdc, it->sub, -1, &sr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+    SelectObject(mdc, ofn);
+
+    BitBlt(dst, r.left, r.top, W, H, mdc, 0, 0, SRCCOPY);
+    SelectObject(mdc, omb); DeleteObject(mbm); DeleteDC(mdc);
 }
 
 static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
@@ -3685,66 +3759,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             RECT r = d->rcItem;
 
             if (it->card) {
-                /* Карточка: рисуем в offscreen-буфер (без мерцания), имя — бегущей строкой */
-                g_card_rect = r;                      /* запомним для InvalidateRect по таймеру */
-                int W = r.right - r.left, H = r.bottom - r.top;
-                HDC mdc = CreateCompatibleDC(d->hDC);
-                HBITMAP mbm = CreateCompatibleBitmap(d->hDC, W, H);
-                HGDIOBJ omb = SelectObject(mdc, mbm);
-                SetBkMode(mdc, TRANSPARENT);
-                /* фон меню */
-                RECT full = {0, 0, W, H};
-                HBRUSH bg2 = CreateSolidBrush(cr_bg()); FillRect(mdc, &full, bg2); DeleteObject(bg2);
-
-                COLORREF cardbg = g_ui_theme ? (sel ? RGB(48,66,88)  : RGB(38,54,72))
-                                             : (sel ? RGB(208,228,248): RGB(224,238,251));
-                COLORREF nameC  = g_ui_theme ? RGB(120,180,248) : RGB(0,95,175);
-                COLORREF subC   = g_ui_theme ? RGB(150,165,180) : RGB(95,115,135);
-                if (it->disabled) { nameC = g_ui_theme ? RGB(150,150,150) : RGB(120,120,120); subC = nameC; }
-                /* плашка (в координатах буфера) */
-                RECT c = {5, 3, W - 5, H - 3};
-                HBRUSH fb = CreateSolidBrush(cardbg);
-                HPEN   fp = CreatePen(PS_SOLID, 1, cardbg);
-                HGDIOBJ ob = SelectObject(mdc, fb), op = SelectObject(mdc, fp);
-                RoundRect(mdc, c.left, c.top, c.right, c.bottom, 10, 10);
-                SelectObject(mdc, ob); SelectObject(mdc, op); DeleteObject(fb); DeleteObject(fp);
-                /* иконка-фото слева и стрелка справа */
-                HFONT oi = (HFONT)SelectObject(mdc, g_menu_icon);
-                SetTextColor(mdc, nameC);
-                RECT ir = c; ir.left += 12;
-                DrawTextW(mdc, it->icon, -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                RECT ar = c; ar.right -= 12;
-                DrawTextW(mdc, L"\uE8A7", -1, &ar, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(mdc, oi);
-                /* имя (строка 1) */
-                HFONT ofn = (HFONT)SelectObject(mdc, g_menu_font);
-                SetTextColor(mdc, nameC);
-                int nx = c.left + 42, nRight = c.right - 28;
-                int nBottom = (c.top + c.bottom) / 2 + 2;
-                RECT nr = {nx, c.top, nRight, nBottom};
-                if (g_card_scroll && !it->disabled) {
-                    /* бегущая строка: две копии со сдвигом, обрезаем по области имени */
-                    HRGN clip = CreateRectRgn(nx, c.top, nRight, nBottom + 1);
-                    SelectClipRgn(mdc, clip);
-                    int x1 = nx - g_marquee_off;
-                    RECT t1 = {x1, c.top, x1 + g_marquee_tw + 10, nBottom};
-                    DrawTextW(mdc, it->text, -1, &t1, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
-                    int x2 = x1 + g_marquee_tw + MARQUEE_GAP;
-                    RECT t2 = {x2, c.top, x2 + g_marquee_tw + 10, nBottom};
-                    DrawTextW(mdc, it->text, -1, &t2, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
-                    SelectClipRgn(mdc, NULL); DeleteObject(clip);
-                } else {
-                    DrawTextW(mdc, it->text, -1, &nr, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
-                }
-                /* подзаголовок (строка 2) */
-                SelectObject(mdc, g_menu_sub);
-                RECT sr = {nx, (c.top + c.bottom) / 2 + 1, nRight, c.bottom};
-                SetTextColor(mdc, subC);
-                DrawTextW(mdc, it->sub, -1, &sr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
-                SelectObject(mdc, ofn);
-
-                BitBlt(d->hDC, r.left, r.top, W, H, mdc, 0, 0, SRCCOPY);
-                SelectObject(mdc, omb); DeleteObject(mbm); DeleteDC(mdc);
+                g_card_rect = r; g_card_sel = sel; g_card_it = it;
+                draw_card(d->hDC, r, sel);
                 return TRUE;
             }
 
@@ -3789,12 +3805,22 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == TIMER_ID && !g_paused) run_async(IDM_UPDATE);
         else if (wp == UPD_TIMER_ID) run_update_async(1, g_cfg.auto_update); /* тихая автопроверка */
         else if (wp == MARQUEE_TIMER_ID) {
-            if (g_marquee_hold > 0) g_marquee_hold--;
-            else {
-                g_marquee_off += 2;
-                if (g_marquee_off >= g_marquee_tw + MARQUEE_GAP) { g_marquee_off = 0; g_marquee_hold = 22; }
+            /* время-зависимая прокрутка: позиция считается по прошедшему времени,
+               поэтому движение ровное даже при неравномерном таймере */
+            int cyc = g_marquee_tw + MARQUEE_GAP;          /* длина одного цикла, px */
+            double speed = 0.05;                            /* px/мс (~50 px/с) */
+            int scroll_ms = (int)(cyc / speed);
+            int total = MARQUEE_HOLD_MS + scroll_ms;
+            if (total < 1) total = 1;
+            int phase = (int)((GetTickCount() - g_marquee_start) % (DWORD)total);
+            g_marquee_off = (phase < MARQUEE_HOLD_MS) ? 0
+                           : (int)((phase - MARQUEE_HOLD_MS) * speed);
+            if (g_marquee_off > cyc) g_marquee_off = cyc;
+            if (g_menu_hwnd && g_card_it) {
+                HDC dc = GetDC(g_menu_hwnd);
+                draw_card(dc, g_card_rect, g_card_sel);   /* прямой BitBlt, без перерисовки меню */
+                ReleaseDC(g_menu_hwnd, dc);
             }
-            if (g_menu_hwnd) RedrawWindow(g_menu_hwnd, &g_card_rect, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
         }
         return 0;
     case WM_COMMAND: {
