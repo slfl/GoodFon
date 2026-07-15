@@ -1090,14 +1090,74 @@ static void get_current_wallpaper(WCHAR *out, int outsz)
 
 /* ================= Уведомления в трее ================= */
 
-static void notify_user(const WCHAR *title, const WCHAR *text)
+/* Рендер глифа Segoe MDL2 на цветную скруглённую плашку → HICON для toast. */
+static HICON make_toast_icon(const WCHAR *glyph, COLORREF bg)
+{
+    const int S = 32;
+    BITMAPINFO bi; ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = S; bi.bmiHeader.biHeight = -S; /* top-down */
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+    void *bits = NULL;
+    HDC scr = GetDC(NULL);
+    HDC dc = CreateCompatibleDC(scr);
+    HBITMAP dib = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    HGDIOBJ ob = SelectObject(dc, dib);
+
+    RECT rc = {0, 0, S, S};
+    HBRUSH br = CreateSolidBrush(bg); FillRect(dc, &rc, br); DeleteObject(br);
+    HFONT f = CreateFontW(-22, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                          0, 0, CLEARTYPE_QUALITY, 0, L"Segoe MDL2 Assets");
+    HGDIOBJ of = SelectObject(dc, f);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(255, 255, 255));
+    DrawTextW(dc, glyph, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, of); DeleteObject(f);
+    GdiFlush();
+
+    /* альфа: непрозрачно везде, кроме скруглённых углов (GDI альфу не пишет) */
+    unsigned int *px = (unsigned int *)bits;
+    const int rad = 6;
+    for (int y = 0; y < S; y++) for (int x = 0; x < S; x++) {
+        int a = 255, cx = -1, cy = -1;
+        if      (x < rad     && y < rad)     { cx = rad;         cy = rad; }
+        else if (x >= S - rad && y < rad)    { cx = S - rad - 1; cy = rad; }
+        else if (x < rad     && y >= S - rad){ cx = rad;         cy = S - rad - 1; }
+        else if (x >= S - rad && y >= S - rad){cx = S - rad - 1; cy = S - rad - 1; }
+        if (cx >= 0) { int dx = x - cx, dy = y - cy; if (dx * dx + dy * dy > rad * rad) a = 0; }
+        px[y * S + x] = (px[y * S + x] & 0x00FFFFFF) | ((unsigned)a << 24);
+    }
+    SelectObject(dc, ob);
+    HBITMAP mask = CreateBitmap(S, S, 1, 1, NULL);
+    ICONINFO ii; ZeroMemory(&ii, sizeof(ii)); ii.fIcon = TRUE; ii.hbmColor = dib; ii.hbmMask = mask;
+    HICON ic = CreateIconIndirect(&ii);
+    DeleteObject(mask); DeleteObject(dib); DeleteDC(dc); ReleaseDC(NULL, scr);
+    return ic;
+}
+
+static HICON g_ic_site = NULL, g_ic_fav = NULL, g_ic_check = NULL, g_ic_newver = NULL;
+static void ensure_toast_icons(void)
+{
+    if (g_ic_site) return;
+    g_ic_site   = make_toast_icon(L"\uE896", RGB(0, 120, 215));   /* Download — синий */
+    g_ic_fav    = make_toast_icon(L"\uE735", RGB(214, 74, 106));  /* FavoriteStarFill — розовый */
+    g_ic_check  = make_toast_icon(L"\uE895", RGB(96, 110, 124));   /* Sync — серо-синий */
+    g_ic_newver = make_toast_icon(L"\uE74A", RGB(46, 164, 79));    /* Up — зелёный */
+}
+
+static void notify_core(const WCHAR *title, const WCHAR *text, HICON ic)
 {
     if (!g_cfg.notify) return;
     g_nid.uFlags = NIF_INFO;
     wcsncpy(g_nid.szInfoTitle, title, 63);
     wcsncpy(g_nid.szInfo, text, 255);
-    g_nid.dwInfoFlags = NIIF_INFO;
+    if (ic) { g_nid.hBalloonIcon = ic; g_nid.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON; }
+    else    { g_nid.hBalloonIcon = NULL; g_nid.dwInfoFlags = NIIF_INFO; }
     Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+static void notify_user(const WCHAR *title, const WCHAR *text)
+{
+    notify_core(title, text, NULL);
 }
 
 /* ================= Файловые операции ================= */
@@ -1581,8 +1641,9 @@ static void fallback_local(int favorite_only)
     set_wallpaper(chosen);
     WCHAR info[300];
     _snwprintf(info, 300, L"%s", PathFindFileNameW(chosen));
-    notify_user(favorite_only ? TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites")
-                          : TW(L"Обои обновлены — локально", L"Wallpaper updated — locally"), info);
+    notify_core(favorite_only ? TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites")
+                          : TW(L"Обои обновлены — локально", L"Wallpaper updated — locally"), info,
+                favorite_only ? g_ic_fav : NULL);
 }
 
 static int set_wallpaper_from_favorite(void)
@@ -1600,7 +1661,7 @@ static int set_wallpaper_from_favorite(void)
     char p8[MAX_PATH * 3]; wide_to_utf8(chosen, p8, sizeof(p8));
     LOG_INFO(T("Обои из папки Favorite/%s: %s", "Wallpaper from folder Favorite/%s: %s"), g_cfg.theme, p8);
     WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(chosen));
-    notify_user(TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites"), info);
+    notify_core(TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites"), info, g_ic_fav);
     return 1;
 }
 
@@ -1713,7 +1774,7 @@ static void do_update(void)
     set_wallpaper(saved);
     if (pageu[0]) { strncpy(g_cur_page_url, pageu, sizeof(g_cur_page_url) - 1); g_cur_page_url[sizeof(g_cur_page_url)-1] = 0; } /* точная ссылка */
     WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(saved));
-    notify_user(TW(L"Обои обновлены — с сайта", L"Wallpaper updated — from site"), info);
+    notify_core(TW(L"Обои обновлены — с сайта", L"Wallpaper updated — from site"), info, g_ic_site);
 }
 
 /* Вернуть предыдущие обои из истории (ближайший существующий файл до курсора). */
@@ -1773,7 +1834,7 @@ static void do_favorite(void)
     if (favorite_api(page_url, 1)) {
         LOG_INFO(T("Изображение добавлено в избранное на сайте", "Image added to favorites on the site"));
         WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(dest));
-        notify_user(TW(L"Добавлено в избранное", L"Added to favorites"), info);
+        notify_core(TW(L"Добавлено в избранное", L"Added to favorites"), info, g_ic_fav);
     } else
         LOG_WARN(T("Не удалось добавить в избранное на сайте.", "Failed to add to favorites on the site."));
 }
@@ -1800,7 +1861,7 @@ static void do_unfavorite(void)
     if (DeleteFileW(cur)) {
         LOG_INFO(T("Файл удалён из папки Favorite", "File deleted from Favorite folder"));
         WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(cur));
-        notify_user(TW(L"Удалено из избранного", L"Removed from favorites"), info);
+        notify_core(TW(L"Удалено из избранного", L"Removed from favorites"), info, g_ic_fav);
     }
     do_update(); /* сразу ставим новую */
 }
@@ -2150,7 +2211,7 @@ static void check_update(int silent, int install)
     WCHAR upd[MAX_PATH];  PathCombineW(upd, dir, L"GoodFon-update.exe");
 
     upd_status(1);   /* проверяю */
-    if (!silent) notify_user(APP_NAME, TW(L"Проверяю обновления…", L"Checking for updates…"));
+    if (!silent) notify_core(APP_NAME, TW(L"Проверяю обновления…", L"Checking for updates…"), g_ic_check);
 
     if (!fetch_url_raw(UPDATE_EXE_URL, upd, NULL, 0)) {
         upd_status(4);
@@ -2223,7 +2284,7 @@ static void check_update(int silent, int install)
             else
                 wcscpy(m, TW(L"Доступна новая версия. Откройте «Обновления».",
                              L"A new version is available. Open «Updates»."));
-            notify_user(APP_NAME, m);
+            notify_core(APP_NAME, m, g_ic_newver);
         }
         return;
     }
@@ -2555,6 +2616,7 @@ static void tray_add(void)
     if (!g_nid.hIcon) g_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
     wcscpy(g_nid.szTip, TW(L"GoodFon — смена обоев", L"GoodFon — wallpaper changer"));
     Shell_NotifyIconW(NIM_ADD, &g_nid);
+    ensure_toast_icons();
 }
 
 /* ============================ Окно настроек ============================ */
