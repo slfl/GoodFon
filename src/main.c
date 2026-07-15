@@ -3485,6 +3485,17 @@ static HFONT g_menu_font = NULL, g_menu_icon = NULL, g_menu_sub = NULL;
 static WCHAR g_card_name[128];   /* имя текущей картинки для карточки */
 static WCHAR g_card_sub[160];    /* «тема: … · открыть на сайте» */
 
+/* Бегущая строка имени в карточке + фиксированная ширина меню */
+#define CARD_W          272      /* фикс. ширина меню (по карточке) */
+#define MARQUEE_GAP     46       /* зазор между копиями бегущего текста */
+#define MARQUEE_TIMER_ID 3
+static HWND  g_menu_hwnd = NULL; /* окно popup-меню (#32768) */
+static RECT  g_card_rect;        /* прямоугольник карточки в координатах окна меню */
+static int   g_marquee_off = 0;  /* сдвиг бегущей строки, px */
+static int   g_marquee_tw = 0;   /* ширина имени, px */
+static int   g_card_scroll = 0;  /* 1 = имя не влезает, крутим */
+static int   g_marquee_hold = 0; /* пауза (в тиках) перед прокруткой */
+
 static void menu_add(HMENU m, const WCHAR *icon, const WCHAR *txt, UINT id, int checked, int disabled)
 {
     GfMenuItem *it = &g_mi[g_min];
@@ -3524,6 +3535,7 @@ static void CALLBACK menu_popup_evt(HWINEVENTHOOK hk, DWORD ev, HWND hwnd,
     (void)hk; (void)ev; (void)idObj; (void)idChild; (void)idThread; (void)tm;
     WCHAR cls[16];
     if (GetClassNameW(hwnd, cls, 16) && !wcscmp(cls, L"#32768")) {
+        g_menu_hwnd = hwnd;
         int pref = DWMWCP_ROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
     }
@@ -3552,6 +3564,16 @@ static void show_menu(void)
         wcscpy(g_card_sub,  TW(L"сменить обои сейчас", L"change wallpaper now"));
     }
 
+    /* нужна ли бегущая строка: имя шире области карточки */
+    g_marquee_off = 0; g_marquee_hold = 22; g_menu_hwnd = NULL;
+    {
+        HDC dc = GetDC(g_hwnd); HFONT of = (HFONT)SelectObject(dc, g_menu_font);
+        SIZE ns; GetTextExtentPoint32W(dc, g_card_name, lstrlenW(g_card_name), &ns);
+        SelectObject(dc, of); ReleaseDC(g_hwnd, dc);
+        g_marquee_tw = ns.cx;
+        g_card_scroll = have_cur && (ns.cx > CARD_W - 80);   /* область имени ≈ CARD_W-80 */
+    }
+
     g_min = 0;
     HMENU m = CreatePopupMenu();
     menu_add_card(m, g_card_name, g_card_sub, IDM_OPENSITE, !have_cur);
@@ -3578,7 +3600,10 @@ static void show_menu(void)
     HWINEVENTHOOK eh = SetWinEventHook(EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPSTART,
                                        NULL, menu_popup_evt, GetCurrentProcessId(), 0,
                                        WINEVENT_OUTOFCONTEXT);
+    if (g_card_scroll) SetTimer(g_hwnd, MARQUEE_TIMER_ID, 33, NULL);   /* ~30 fps */
     TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_hwnd, NULL);
+    KillTimer(g_hwnd, MARQUEE_TIMER_ID);
+    g_menu_hwnd = NULL;
     if (eh) UnhookWinEvent(eh);
     DestroyMenu(m);
     if (menubg) DeleteObject(menubg);
@@ -3623,15 +3648,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             GfMenuItem *it = (GfMenuItem *)mis->itemData;
             if (it && it->sep) { mis->itemHeight = 9; mis->itemWidth = 10; }
             else if (it && it->card) {
-                HDC dc = GetDC(h);
-                HFONT of = (HFONT)SelectObject(dc, g_menu_font);
-                SIZE s1; GetTextExtentPoint32W(dc, it->text, lstrlenW(it->text), &s1);
-                SelectObject(dc, g_menu_sub);
-                SIZE s2; GetTextExtentPoint32W(dc, it->sub, lstrlenW(it->sub), &s2);
-                SelectObject(dc, of); ReleaseDC(h, dc);
-                int tw = (s1.cx > s2.cx ? s1.cx : s2.cx);
-                if (tw > 240) tw = 240;          /* длинное имя обрежется по «…» */
-                mis->itemWidth = tw + 44 + 26;   /* иконка слева + текст + стрелка справа */
+                mis->itemWidth = CARD_W;   /* фиксированная ширина меню */
                 mis->itemHeight = 48;
             }
             else if (it) {
@@ -3668,38 +3685,66 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             RECT r = d->rcItem;
 
             if (it->card) {
-                /* Карточка текущей картинки: скруглённая акцентная плашка */
+                /* Карточка: рисуем в offscreen-буфер (без мерцания), имя — бегущей строкой */
+                g_card_rect = r;                      /* запомним для InvalidateRect по таймеру */
+                int W = r.right - r.left, H = r.bottom - r.top;
+                HDC mdc = CreateCompatibleDC(d->hDC);
+                HBITMAP mbm = CreateCompatibleBitmap(d->hDC, W, H);
+                HGDIOBJ omb = SelectObject(mdc, mbm);
+                SetBkMode(mdc, TRANSPARENT);
+                /* фон меню */
+                RECT full = {0, 0, W, H};
+                HBRUSH bg2 = CreateSolidBrush(cr_bg()); FillRect(mdc, &full, bg2); DeleteObject(bg2);
+
                 COLORREF cardbg = g_ui_theme ? (sel ? RGB(48,66,88)  : RGB(38,54,72))
                                              : (sel ? RGB(208,228,248): RGB(224,238,251));
                 COLORREF nameC  = g_ui_theme ? RGB(120,180,248) : RGB(0,95,175);
                 COLORREF subC   = g_ui_theme ? RGB(150,165,180) : RGB(95,115,135);
                 if (it->disabled) { nameC = g_ui_theme ? RGB(150,150,150) : RGB(120,120,120); subC = nameC; }
-                RECT c = r; c.left += 5; c.right -= 5; c.top += 3; c.bottom -= 3;
+                /* плашка (в координатах буфера) */
+                RECT c = {5, 3, W - 5, H - 3};
                 HBRUSH fb = CreateSolidBrush(cardbg);
                 HPEN   fp = CreatePen(PS_SOLID, 1, cardbg);
-                HGDIOBJ ob = SelectObject(d->hDC, fb), op = SelectObject(d->hDC, fp);
-                RoundRect(d->hDC, c.left, c.top, c.right, c.bottom, 10, 10);
-                SelectObject(d->hDC, ob); SelectObject(d->hDC, op); DeleteObject(fb); DeleteObject(fp);
-                /* иконка-фото слева */
-                HFONT oi = (HFONT)SelectObject(d->hDC, g_menu_icon);
-                SetTextColor(d->hDC, nameC);
+                HGDIOBJ ob = SelectObject(mdc, fb), op = SelectObject(mdc, fp);
+                RoundRect(mdc, c.left, c.top, c.right, c.bottom, 10, 10);
+                SelectObject(mdc, ob); SelectObject(mdc, op); DeleteObject(fb); DeleteObject(fp);
+                /* иконка-фото слева и стрелка справа */
+                HFONT oi = (HFONT)SelectObject(mdc, g_menu_icon);
+                SetTextColor(mdc, nameC);
                 RECT ir = c; ir.left += 12;
-                DrawTextW(d->hDC, it->icon, -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                /* стрелка «открыть» справа */
+                DrawTextW(mdc, it->icon, -1, &ir, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 RECT ar = c; ar.right -= 12;
-                DrawTextW(d->hDC, L"\uE8A7", -1, &ar, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(d->hDC, oi);
+                DrawTextW(mdc, L"\uE8A7", -1, &ar, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(mdc, oi);
                 /* имя (строка 1) */
-                HFONT ofn = (HFONT)SelectObject(d->hDC, g_menu_font);
-                RECT nr = c; nr.left += 42; nr.right -= 28; nr.bottom = (c.top + c.bottom) / 2 + 2;
-                SetTextColor(d->hDC, nameC);
-                DrawTextW(d->hDC, it->text, -1, &nr, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+                HFONT ofn = (HFONT)SelectObject(mdc, g_menu_font);
+                SetTextColor(mdc, nameC);
+                int nx = c.left + 42, nRight = c.right - 28;
+                int nBottom = (c.top + c.bottom) / 2 + 2;
+                RECT nr = {nx, c.top, nRight, nBottom};
+                if (g_card_scroll && !it->disabled) {
+                    /* бегущая строка: две копии со сдвигом, обрезаем по области имени */
+                    HRGN clip = CreateRectRgn(nx, c.top, nRight, nBottom + 1);
+                    SelectClipRgn(mdc, clip);
+                    int x1 = nx - g_marquee_off;
+                    RECT t1 = {x1, c.top, x1 + g_marquee_tw + 10, nBottom};
+                    DrawTextW(mdc, it->text, -1, &t1, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
+                    int x2 = x1 + g_marquee_tw + MARQUEE_GAP;
+                    RECT t2 = {x2, c.top, x2 + g_marquee_tw + 10, nBottom};
+                    DrawTextW(mdc, it->text, -1, &t2, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
+                    SelectClipRgn(mdc, NULL); DeleteObject(clip);
+                } else {
+                    DrawTextW(mdc, it->text, -1, &nr, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+                }
                 /* подзаголовок (строка 2) */
-                SelectObject(d->hDC, g_menu_sub);
-                RECT sr = c; sr.left += 42; sr.right -= 28; sr.top = (c.top + c.bottom) / 2 + 1;
-                SetTextColor(d->hDC, subC);
-                DrawTextW(d->hDC, it->sub, -1, &sr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
-                SelectObject(d->hDC, ofn);
+                SelectObject(mdc, g_menu_sub);
+                RECT sr = {nx, (c.top + c.bottom) / 2 + 1, nRight, c.bottom};
+                SetTextColor(mdc, subC);
+                DrawTextW(mdc, it->sub, -1, &sr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+                SelectObject(mdc, ofn);
+
+                BitBlt(d->hDC, r.left, r.top, W, H, mdc, 0, 0, SRCCOPY);
+                SelectObject(mdc, omb); DeleteObject(mbm); DeleteDC(mdc);
                 return TRUE;
             }
 
@@ -3743,6 +3788,14 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         if (wp == TIMER_ID && !g_paused) run_async(IDM_UPDATE);
         else if (wp == UPD_TIMER_ID) run_update_async(1, g_cfg.auto_update); /* тихая автопроверка */
+        else if (wp == MARQUEE_TIMER_ID) {
+            if (g_marquee_hold > 0) g_marquee_hold--;
+            else {
+                g_marquee_off += 2;
+                if (g_marquee_off >= g_marquee_tw + MARQUEE_GAP) { g_marquee_off = 0; g_marquee_hold = 22; }
+            }
+            if (g_menu_hwnd) RedrawWindow(g_menu_hwnd, &g_card_rect, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+        }
         return 0;
     case WM_COMMAND: {
         int id = LOWORD(wp);
