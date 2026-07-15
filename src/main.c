@@ -77,6 +77,18 @@ static COLORREF cr_accent(void){ return RGB(0,120,215); }
 static COLORREF cr_border(void)  { return g_ui_theme ? RGB(82,82,82)  : RGB(205,205,205); }
 static COLORREF cr_btnface(void) { return g_ui_theme ? RGB(55,55,55)  : RGB(251,251,251); }
 static COLORREF cr_btnpress(void){ return g_ui_theme ? RGB(72,72,72)  : RGB(229,229,229); }
+
+/* Скруглённый прямоугольник: заливка fill + рамка border (общий helper). */
+static void fill_round(HDC dc, RECT rc, int rad, COLORREF fill, COLORREF border)
+{
+    HBRUSH b = CreateSolidBrush(fill);
+    HPEN   p = CreatePen(PS_SOLID, 1, border);
+    HGDIOBJ ob = SelectObject(dc, b), op = SelectObject(dc, p);
+    RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, rad, rad);
+    SelectObject(dc, ob); SelectObject(dc, op);
+    DeleteObject(b); DeleteObject(p);
+}
+
 static void theme_brushes_rebuild(void)
 {
     if (g_br_bg)  DeleteObject(g_br_bg);
@@ -2641,13 +2653,7 @@ static LRESULT CALLBACK ComboSubProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         int bw = GetSystemMetrics(SM_CXVSCROLL) + 4;
 
         FillRect(dc, &rc, g_br_bg);   /* фон окна — чтобы углы скругления слились */
-
-        HBRUSH bg = CreateSolidBrush(cr_ctl());
-        HPEN   pen = CreatePen(PS_SOLID, 1, cr_border());
-        HGDIOBJ ob = SelectObject(dc, bg), op = SelectObject(dc, pen);
-        RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, 12, 12);
-        SelectObject(dc, ob); SelectObject(dc, op);
-        DeleteObject(bg); DeleteObject(pen);
+        fill_round(dc, rc, 12, cr_ctl(), cr_border());
 
         int sel = (int)SendMessageW(h, CB_GETCURSEL, 0, 0);
         if (sel >= 0) {
@@ -2843,12 +2849,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 POINT tl = { r.left, r.top }, br = { r.right, r.bottom };
                 ScreenToClient(h, &tl); ScreenToClient(h, &br);
                 RECT box = { tl.x - 8, tl.y - 7, br.x + 8, br.y + 1 };
-                HBRUSH bg = CreateSolidBrush(cr_ctl());
-                HPEN pen = CreatePen(PS_SOLID, 1, cr_border());
-                HGDIOBJ ob = SelectObject(dc, bg), op = SelectObject(dc, pen);
-                RoundRect(dc, box.left, box.top, box.right, box.bottom, 10, 10);
-                SelectObject(dc, ob); SelectObject(dc, op);
-                DeleteObject(bg); DeleteObject(pen);
+                fill_round(dc, box, 10, cr_ctl(), cr_border());
             }
             /* ----- блок профильной статистики (сверху страницы) ----- */
             {
@@ -3050,13 +3051,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 bord = cr_border();
             }
             FillRect(d->hDC, &d->rcItem, g_br_bg);      /* фон под скруглением */
-            HBRUSH hb = CreateSolidBrush(fill);
-            HPEN   hp = CreatePen(PS_SOLID, 1, bord);
-            HGDIOBJ ob = SelectObject(d->hDC, hb), op = SelectObject(d->hDC, hp);
-            RoundRect(d->hDC, d->rcItem.left, d->rcItem.top,
-                      d->rcItem.right, d->rcItem.bottom, 12, 12);
-            SelectObject(d->hDC, ob); SelectObject(d->hDC, op);
-            DeleteObject(hb); DeleteObject(hp);
+            fill_round(d->hDC, d->rcItem, 12, fill, bord);
             WCHAR t[64]; GetWindowTextW(d->hwndItem, t, 64);
             SetBkMode(d->hDC, TRANSPARENT);
             SetTextColor(d->hDC, txt);
@@ -3735,11 +3730,7 @@ static void draw_card(HDC dst, RECT r, int sel)
     if (it->disabled) { nameC = g_ui_theme ? RGB(150,150,150) : RGB(120,120,120); subC = nameC; }
 
     RECT c = {5, 3, W - 5, H - 3};
-    HBRUSH fb = CreateSolidBrush(cardbg);
-    HPEN   fp = CreatePen(PS_SOLID, 1, cardbg);
-    HGDIOBJ ob = SelectObject(mdc, fb), op = SelectObject(mdc, fp);
-    RoundRect(mdc, c.left, c.top, c.right, c.bottom, 10, 10);
-    SelectObject(mdc, ob); SelectObject(mdc, op); DeleteObject(fb); DeleteObject(fp);
+    fill_round(mdc, c, 10, cardbg, cardbg);
 
     HFONT oi = (HFONT)SelectObject(mdc, g_menu_icon);
     SetTextColor(mdc, nameC);
@@ -3831,11 +3822,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             /* обычный пункт: скруглённая подсветка при наведении */
             if (sel) {
                 RECT hR = r; hR.left += 4; hR.right -= 4; hR.top += 1; hR.bottom -= 1;
-                HBRUSH sb = CreateSolidBrush(cr_sel());
-                HPEN   sp = CreatePen(PS_SOLID, 1, cr_sel());
-                HGDIOBJ ob = SelectObject(d->hDC, sb), op = SelectObject(d->hDC, sp);
-                RoundRect(d->hDC, hR.left, hR.top, hR.right, hR.bottom, 7, 7);
-                SelectObject(d->hDC, ob); SelectObject(d->hDC, op); DeleteObject(sb); DeleteObject(sp);
+                fill_round(d->hDC, hR, 7, cr_sel(), cr_sel());
             }
             COLORREF fg = it->disabled ? (g_ui_theme ? RGB(140,140,140) : RGB(160,160,160)) : cr_txt();
             /* иконка слева */
