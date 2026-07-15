@@ -3653,7 +3653,9 @@ static void show_menu(void)
     menu_add(m, L"\uE734", TW(L"Добавить в избранное", L"Add to favorites"), IDM_FAVORITE, 0, 0);
     menu_add(m, L"\uE735", TW(L"Убрать из избранного", L"Remove from favorites"), IDM_UNFAVORITE, 0, 0);
     menu_sep(m);
-    menu_add(m, g_paused ? L"\uE768" : L"\uE769", TW(L"Пауза", L"Pause"), IDM_PAUSE, g_paused, 0);
+    menu_add(m, g_paused ? L"\uE768" : L"\uE769",
+             g_paused ? TW(L"Продолжить", L"Resume") : TW(L"Пауза", L"Pause"),
+             IDM_PAUSE, 0, 0);
     menu_add(m, L"\uE713", TW(L"Настройки", L"Settings"), IDM_SETTINGS, 0, 0);
     menu_sep(m);
     menu_add(m, L"\uE711", TW(L"Выход", L"Exit"), IDM_EXIT, 0, 0);
