@@ -3510,6 +3510,25 @@ static void menu_add_card(HMENU m, const WCHAR *name, const WCHAR *sub, UINT id,
     g_min++;
 }
 
+/* Скругление углов popup-меню (Windows 11): ловим окно меню (#32768) в момент
+   появления и включаем DWM-скругление — как у обычных окон. */
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
+static void CALLBACK menu_popup_evt(HWINEVENTHOOK hk, DWORD ev, HWND hwnd,
+                                    LONG idObj, LONG idChild, DWORD idThread, DWORD tm)
+{
+    (void)hk; (void)ev; (void)idObj; (void)idChild; (void)idThread; (void)tm;
+    WCHAR cls[16];
+    if (GetClassNameW(hwnd, cls, 16) && !wcscmp(cls, L"#32768")) {
+        int pref = DWMWCP_ROUND;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+    }
+}
+
 static void show_menu(void)
 {
     if (!g_menu_font) {
@@ -3556,7 +3575,11 @@ static void show_menu(void)
 
     POINT pt; GetCursorPos(&pt);
     SetForegroundWindow(g_hwnd);
+    HWINEVENTHOOK eh = SetWinEventHook(EVENT_SYSTEM_MENUPOPUPSTART, EVENT_SYSTEM_MENUPOPUPSTART,
+                                       NULL, menu_popup_evt, GetCurrentProcessId(), 0,
+                                       WINEVENT_OUTOFCONTEXT);
     TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_hwnd, NULL);
+    if (eh) UnhookWinEvent(eh);
     DestroyMenu(m);
     if (menubg) DeleteObject(menubg);
 }
