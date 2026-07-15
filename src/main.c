@@ -38,7 +38,7 @@
 /* ================= Константы ================= */
 
 #define APP_NAME        L"GoodFon"
-#define APP_VERSION     "2.3"
+#define APP_VERSION     "2.4"
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_ID        1
 #define UPD_TIMER_ID    2
@@ -2837,7 +2837,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HGDIOBJ of = SelectObject(dc, g_set_font_title);
             SetTextColor(dc, cr_txt());
             RECT rt = { x, y, x + w, y + 26 };
-            DrawTextW(dc, L"GoodFon 2.3", -1, &rt, DT_LEFT | DT_SINGLELINE);
+            DrawTextW(dc, L"GoodFon 2.4", -1, &rt, DT_LEFT | DT_SINGLELINE);
             y += 34;
             /* описание с переносом по словам */
             SelectObject(dc, g_set_font);
