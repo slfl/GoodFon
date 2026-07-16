@@ -212,6 +212,11 @@ static const ThemeDef g_themes_all[] = {
 #define MIX_SLUG "mix"
 #define MIX_ID   1000   /* itemData в комбобоксе (не пересекается с индексами тем) */
 
+/* Песочница — новые обои от посетителей, ещё не распределённые по разделам.
+ * В отличие от MIX у неё есть пагинация, поэтому работает как обычная тема. */
+#define SANDBOX_SLUG "sandbox"
+#define SANDBOX_ID   1001
+
 /* Имя темы по текущему языку. */
 static const wchar_t *theme_name(int i)
 { return g_lang == LANG_EN ? g_themes_all[i].name_en : g_themes_all[i].name_ru; }
@@ -3018,9 +3023,10 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             DeleteObject(bb);
             WCHAR t[160]; SendMessageW(d->hwndItem, CB_GETLBTEXT, d->itemID, (LPARAM)t);
             HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
-            if (d->CtlID == IDC_CB_THEME && g_set_font_bold &&
-                (int)SendMessageW(d->hwndItem, CB_GETITEMDATA, d->itemID, 0) == MIX_ID)
-                f = g_set_font_bold;   /* MIX — жирным, чтобы выделялся */
+            if (d->CtlID == IDC_CB_THEME && g_set_font_bold) {
+                INT_PTR dt = SendMessageW(d->hwndItem, CB_GETITEMDATA, d->itemID, 0);
+                if (dt == MIX_ID || dt == SANDBOX_ID) f = g_set_font_bold; /* особые секции — жирным */
+            }
             HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
             SetBkMode(d->hDC, TRANSPARENT);
             SetTextColor(d->hDC, cr_txt());
@@ -3123,7 +3129,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         else if (id == IDC_CB_THEME && code == CBN_SELCHANGE) {
             int s = (int)SendMessageW(ctl, CB_GETCURSEL, 0, 0);
             int idx = (int)SendMessageW(ctl, CB_GETITEMDATA, s, 0);
-            if (idx != MIX_ID && !_stricmp(g_themes_all[idx].slug, "erotic") && !is_authorized()) {
+            if (idx != MIX_ID && idx != SANDBOX_ID && !_stricmp(g_themes_all[idx].slug, "erotic") && !is_authorized()) {
                 MessageBoxW(h, TW(L"Доступно после авторизации.", L"Available after sign in."),
                             APP_NAME, MB_ICONINFORMATION);
                 int cnt = (int)SendMessageW(ctl, CB_GETCOUNT, 0, 0);
@@ -3379,7 +3385,9 @@ static void open_settings(void)
                       VX, y, VW, 240, IDC_CB_THEME, 0);
     { int order[THEME_COUNT];
       cb_add(cbTheme, TW(L"MIX — случайные обои", L"MIX — random wallpapers"), MIX_ID);
-      if (!_stricmp(g_cfg.theme, MIX_SLUG)) SendMessageW(cbTheme, CB_SETCURSEL, 0, 0);
+      cb_add(cbTheme, TW(L"Песочница — новые обои", L"Sandbox — new wallpapers"), SANDBOX_ID);
+      if (!_stricmp(g_cfg.theme, MIX_SLUG))          SendMessageW(cbTheme, CB_SETCURSEL, 0, 0);
+      else if (!_stricmp(g_cfg.theme, SANDBOX_SLUG)) SendMessageW(cbTheme, CB_SETCURSEL, 1, 0);
       for (int i = 0; i < THEME_COUNT; i++) order[i] = i;
       qsort(order, THEME_COUNT, sizeof(int), theme_cmp);
       for (int k = 0; k < THEME_COUNT; k++) {
@@ -3390,7 +3398,7 @@ static void open_settings(void)
           else { wcsncpy(lbl, theme_name(i), 95); lbl[95] = 0; }
           cb_add(cbTheme, lbl, i);
           if (!_stricmp(g_themes_all[i].slug, g_cfg.theme))
-              SendMessageW(cbTheme, CB_SETCURSEL, k + 1, 0);   /* +1: MIX занимает позицию 0 */
+              SendMessageW(cbTheme, CB_SETCURSEL, k + 2, 0);   /* +2: MIX(0) и Песочница(1) */
       } }
 
     y += 40;
@@ -3723,7 +3731,8 @@ static void apply_update_interval(void)
 static void select_theme(int idx)
 {
     const char *slug;
-    if (idx == MIX_ID)                    slug = MIX_SLUG;
+    if (idx == MIX_ID)                      slug = MIX_SLUG;
+    else if (idx == SANDBOX_ID)             slug = SANDBOX_SLUG;
     else if (idx >= 0 && idx < THEME_COUNT) slug = g_themes_all[idx].slug;
     else return;
     strncpy(g_cfg.theme, slug, sizeof(g_cfg.theme) - 1);
