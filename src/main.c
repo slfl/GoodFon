@@ -207,6 +207,11 @@ static const ThemeDef g_themes_all[] = {
 };
 #define THEME_COUNT (int)(sizeof(g_themes_all)/sizeof(g_themes_all[0]))
 
+/* MIX — псевдо-тема: случайная выборка по всем разделам (страница /mix/,
+ * без пагинации; каждый запрос отдаёт новый набор — как кнопка «Перемешать»). */
+#define MIX_SLUG "mix"
+#define MIX_ID   1000   /* itemData в комбобоксе (не пересекается с индексами тем) */
+
 /* Имя темы по текущему языку. */
 static const wchar_t *theme_name(int i)
 { return g_lang == LANG_EN ? g_themes_all[i].name_en : g_themes_all[i].name_ru; }
@@ -1685,22 +1690,28 @@ static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz, char *page
     int max_pages = 0, images_tried = 0, net_fails = 0;
     const int NET_FAIL_LIMIT = g_cfg.max_attempts + 4;
     char base[64]; base_url(base, sizeof(base));
+    int is_mix = !_stricmp(g_cfg.theme, MIX_SLUG);
 
     while (images_tried < IMG_BUDGET) {
-        if (max_pages == 0) {
-            max_pages = get_max_pages();
-            if (max_pages == 0) {
-                if (++net_fails >= NET_FAIL_LIMIT) break;
-                LOG_WARN(T("Ошибка пагинации (сбой %d)", "Pagination error (failure %d)"), net_fails);
-                Sleep(1000);
-                continue;
-            }
-            LOG_INFO(T("Максимальное количество страниц: %d", "Maximum number of pages: %d"), max_pages);
-        }
-        int page = rand() % max_pages + 1;
         char page_url[512];
-        if (page == 1) snprintf(page_url, sizeof(page_url), "%s/%s/", base, g_cfg.theme);
-        else snprintf(page_url, sizeof(page_url), "%s/%s/index-%d.html", base, g_cfg.theme, page);
+        if (is_mix) {
+            /* /mix/ — без пагинации; каждый запрос отдаёт новую случайную выборку */
+            snprintf(page_url, sizeof(page_url), "%s/mix/", base);
+        } else {
+            if (max_pages == 0) {
+                max_pages = get_max_pages();
+                if (max_pages == 0) {
+                    if (++net_fails >= NET_FAIL_LIMIT) break;
+                    LOG_WARN(T("Ошибка пагинации (сбой %d)", "Pagination error (failure %d)"), net_fails);
+                    Sleep(1000);
+                    continue;
+                }
+                LOG_INFO(T("Максимальное количество страниц: %d", "Maximum number of pages: %d"), max_pages);
+            }
+            int page = rand() % max_pages + 1;
+            if (page == 1) snprintf(page_url, sizeof(page_url), "%s/%s/", base, g_cfg.theme);
+            else snprintf(page_url, sizeof(page_url), "%s/%s/index-%d.html", base, g_cfg.theme, page);
+        }
 
         HttpResp r;
         if (!http_request("GET", page_url, NULL, NULL, 15000, BODY_LIMIT, &r) ||
@@ -1716,6 +1727,17 @@ static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz, char *page
         static char links[64][512];
         int n = collect_links(r.body, links, 64);
         free(r.body);
+        if (is_mix) {
+            /* оставить только www-раздел текущего домена — поддомены (anime./auto.)
+               могут ломать относительную ссылку на скачивание, пропускаем их */
+            int m = 0;
+            for (int i = 0; i < n; i++)
+                if (strstr(links[i], g_hosts[g_active_domain])) {
+                    if (m != i) memcpy(links[m], links[i], 512);
+                    m++;
+                }
+            n = m;
+        }
         if (n == 0) { LOG_WARN(T("На странице нет обоев, пробуем другую", "No wallpapers on the page, trying another")); continue; }
 
         int per_page = n < 6 ? n : 6;
@@ -2640,7 +2662,7 @@ static int   g_set_page = 0;
 static RECT  g_github_rect = {0,0,0,0};   /* хит-зона ссылки Github на стр. About */
 #define REPO_URL  L"https://github.com/slfl/GoodFon"
 static int   g_login_status = 0;   /* 0 нет, 1 успех, 2 ошибка — статус входа в окне */
-static HFONT g_set_font = NULL, g_set_font_title = NULL, g_set_font_icon = NULL;
+static HFONT g_set_font = NULL, g_set_font_title = NULL, g_set_font_icon = NULL, g_set_font_bold = NULL;
 
 /* Подкласс комбобокса: в тёмной теме полностью рисуем его сами (фон, рамка,
  * текст выбранного пункта, стрелка) — чтобы не было белой рамки/кнопки. */
@@ -2996,6 +3018,9 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             DeleteObject(bb);
             WCHAR t[160]; SendMessageW(d->hwndItem, CB_GETLBTEXT, d->itemID, (LPARAM)t);
             HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
+            if (d->CtlID == IDC_CB_THEME && g_set_font_bold &&
+                (int)SendMessageW(d->hwndItem, CB_GETITEMDATA, d->itemID, 0) == MIX_ID)
+                f = g_set_font_bold;   /* MIX — жирным, чтобы выделялся */
             HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
             SetBkMode(d->hDC, TRANSPARENT);
             SetTextColor(d->hDC, cr_txt());
@@ -3098,7 +3123,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         else if (id == IDC_CB_THEME && code == CBN_SELCHANGE) {
             int s = (int)SendMessageW(ctl, CB_GETCURSEL, 0, 0);
             int idx = (int)SendMessageW(ctl, CB_GETITEMDATA, s, 0);
-            if (!_stricmp(g_themes_all[idx].slug, "erotic") && !is_authorized()) {
+            if (idx != MIX_ID && !_stricmp(g_themes_all[idx].slug, "erotic") && !is_authorized()) {
                 MessageBoxW(h, TW(L"Доступно после авторизации.", L"Available after sign in."),
                             APP_NAME, MB_ICONINFORMATION);
                 int cnt = (int)SendMessageW(ctl, CB_GETCOUNT, 0, 0);
@@ -3300,6 +3325,8 @@ static void open_settings(void)
                                        0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
         g_set_font_icon = CreateFontW(-16, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                                       0, 0, CLEARTYPE_QUALITY, 0, L"Segoe MDL2 Assets");
+        g_set_font_bold = CreateFontW(-12, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                                      0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     }
     static int reg = 0;
     if (!reg) {
@@ -3351,6 +3378,8 @@ static void open_settings(void)
     HWND cbTheme = mk(h, L"COMBOBOX", NULL, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP,
                       VX, y, VW, 240, IDC_CB_THEME, 0);
     { int order[THEME_COUNT];
+      cb_add(cbTheme, TW(L"MIX — случайные обои", L"MIX — random wallpapers"), MIX_ID);
+      if (!_stricmp(g_cfg.theme, MIX_SLUG)) SendMessageW(cbTheme, CB_SETCURSEL, 0, 0);
       for (int i = 0; i < THEME_COUNT; i++) order[i] = i;
       qsort(order, THEME_COUNT, sizeof(int), theme_cmp);
       for (int k = 0; k < THEME_COUNT; k++) {
@@ -3361,7 +3390,7 @@ static void open_settings(void)
           else { wcsncpy(lbl, theme_name(i), 95); lbl[95] = 0; }
           cb_add(cbTheme, lbl, i);
           if (!_stricmp(g_themes_all[i].slug, g_cfg.theme))
-              SendMessageW(cbTheme, CB_SETCURSEL, k, 0);
+              SendMessageW(cbTheme, CB_SETCURSEL, k + 1, 0);   /* +1: MIX занимает позицию 0 */
       } }
 
     y += 40;
@@ -3693,8 +3722,11 @@ static void apply_update_interval(void)
 
 static void select_theme(int idx)
 {
-    if (idx < 0 || idx >= THEME_COUNT) return;
-    strncpy(g_cfg.theme, g_themes_all[idx].slug, sizeof(g_cfg.theme) - 1);
+    const char *slug;
+    if (idx == MIX_ID)                    slug = MIX_SLUG;
+    else if (idx >= 0 && idx < THEME_COUNT) slug = g_themes_all[idx].slug;
+    else return;
+    strncpy(g_cfg.theme, slug, sizeof(g_cfg.theme) - 1);
     g_cfg.theme[sizeof(g_cfg.theme) - 1] = 0;
     reg_set_str(L"theme", g_cfg.theme);
     /* пересчёт Favorite-папки под новую тему */
