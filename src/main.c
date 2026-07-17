@@ -306,40 +306,53 @@ static NOTIFYICONDATAW g_nid;
 static volatile LONG g_busy = 0;
 static int g_paused = 0;
 static int g_debug = 0;
-static FILE *g_log = NULL;
-static WCHAR g_log_path[MAX_PATH];
+static int   g_log_console = 0;           /* лог идёт в консоль родителя */
+static WCHAR g_log_path[MAX_PATH];         /* путь к goodfon.log (если в файл) */
 
 /* ================= Логирование ================= */
 
 /* Логи включаются только при запуске с флагом -debug.
- * Без него файл не создаётся и ничего не пишется (релизный режим). */
+ * Файл пишется в режиме «открыть-дозаписать-закрыть» на каждую строку с полным
+ * шарингом — его можно открывать блокнотом во время работы приложения, файл не
+ * блокируется, а записанные строки видны сразу. */
 static void log_open(int debug)
 {
     g_debug = debug;
-    if (!debug) { g_log = NULL; return; }
+    g_log_console = 0;
+    g_log_path[0] = 0;
+    if (!debug) return;
 
     /* Консоль родителя (запуск из терминала) либо файл goodfon.log */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
         freopen("CONOUT$", "w", stdout);
-        g_log = stdout;
+        g_log_console = 1;
         SetConsoleOutputCP(CP_UTF8);
-    } else {
-        GetModuleFileNameW(NULL, g_log_path, MAX_PATH);
-        PathRemoveFileSpecW(g_log_path);
-        PathAppendW(g_log_path, L"goodfon.log");
-        /* простое ограничение размера: >1 МБ — обнуляем */
-        WIN32_FILE_ATTRIBUTE_DATA fad;
-        if (GetFileAttributesExW(g_log_path, GetFileExInfoStandard, &fad) &&
-            fad.nFileSizeLow > (1u << 20))
-            _wfopen_s(&g_log, g_log_path, L"w, ccs=UTF-8");
-        else
-            _wfopen_s(&g_log, g_log_path, L"a, ccs=UTF-8");
+        return;
+    }
+    GetModuleFileNameW(NULL, g_log_path, MAX_PATH);
+    PathRemoveFileSpecW(g_log_path);
+    PathAppendW(g_log_path, L"goodfon.log");
+
+    /* простое ограничение размера: >1 МБ — начинаем заново */
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    int exists = GetFileAttributesExW(g_log_path, GetFileExInfoStandard, &fad) ? 1 : 0;
+    if (exists && fad.nFileSizeLow > (1u << 20)) { DeleteFileW(g_log_path); exists = 0; }
+    if (!exists) {
+        /* создаём файл сразу с UTF-8 BOM (для корректной кириллицы в блокноте) */
+        HANDLE hf = CreateFileW(g_log_path, FILE_APPEND_DATA,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hf != INVALID_HANDLE_VALUE) {
+            static const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+            DWORD wr; WriteFile(hf, bom, 3, &wr, NULL);
+            CloseHandle(hf);
+        }
     }
 }
 
 static void logf_(const char *level, const char *fmt, ...)
 {
-    if (!g_log) return;
+    if (!g_debug) return;
     char msg[1024];
     va_list ap; va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
@@ -348,17 +361,22 @@ static void logf_(const char *level, const char *fmt, ...)
     struct tm tmv; localtime_s(&tmv, &t);
     char ts[32];
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tmv);
-    if (g_log == stdout)
-        fprintf(g_log, "%s %s: %s\n", ts, level, msg);
-    else {
-        /* файл открыт как UTF-16 текст (ccs) — конвертируем */
-        WCHAR w[1200];
-        char line[1200];
-        snprintf(line, sizeof(line), "%s %s: %s\n", ts, level, msg);
-        MultiByteToWideChar(CP_UTF8, 0, line, -1, w, 1200);
-        fputws(w, g_log);
-    }
-    fflush(g_log);
+
+    char line[1200];
+    int len = snprintf(line, sizeof(line), "%s %s: %s\n", ts, level, msg);
+    if (len < 0) return;
+    if (len > (int)sizeof(line) - 1) len = (int)sizeof(line) - 1;
+
+    if (g_log_console) { fputs(line, stdout); fflush(stdout); return; }
+    if (!g_log_path[0]) return;
+
+    /* дозапись с полным шарингом; закрываем сразу — файл не заблокирован */
+    HANDLE hf = CreateFileW(g_log_path, FILE_APPEND_DATA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf == INVALID_HANDLE_VALUE) return;
+    DWORD wr; WriteFile(hf, line, (DWORD)len, &wr, NULL);   /* FILE_APPEND_DATA пишет в конец */
+    CloseHandle(hf);
 }
 #define LOG_INFO(...)  logf_("INFO", __VA_ARGS__)
 #define LOG_WARN(...)  logf_("WARNING", __VA_ARGS__)
