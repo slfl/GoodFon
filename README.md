@@ -9,7 +9,7 @@
 Небольшое нативное приложение, которое живёт в трее и само меняет обои,
 подбирая случайные картинки с [goodfon.com](https://www.goodfon.com) / [goodfon.ru](https://www.goodfon.ru).
 
-![version](https://img.shields.io/badge/version-2.4-2ea44f)
+![version](https://img.shields.io/badge/version-2.5-2ea44f)
 ![platform](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?logo=windows)
 ![lang](https://img.shields.io/badge/C-WinAPI-555?logo=c)
 ![size](https://img.shields.io/badge/exe-~250%20KB-blue)
