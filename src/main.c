@@ -421,6 +421,14 @@ static unsigned rng_next(void)
 }
 static int rng_below(int n) { return n > 1 ? (int)(rng_next() % (unsigned)n) : 0; }
 
+/* Имя файла без расширения — для аккуратного текста уведомлений. */
+static void name_no_ext(const WCHAR *path, WCHAR *out, int outsz)
+{
+    wcsncpy(out, PathFindFileNameW(path), (size_t)outsz - 1);
+    out[outsz - 1] = 0;
+    PathRemoveExtensionW(out);
+}
+
 /* ================= Утилиты строк ================= */
 
 static void utf8_to_wide(const char *s, WCHAR *out, int outsz)
@@ -1742,7 +1750,7 @@ static void fallback_local(int favorite_only)
     LOG_INFO(T("Fallback: устанавливаем локальную картинку: %s", "Fallback: setting local image: %s"), p8);
     set_wallpaper(chosen);
     WCHAR info[300];
-    _snwprintf(info, 300, L"%s", PathFindFileNameW(chosen));
+    name_no_ext(chosen, info, 300);
     notify_core(favorite_only ? TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites")
                           : TW(L"Обои обновлены — локально", L"Wallpaper updated — locally"), info,
                 favorite_only ? g_ic_fav : NULL);
@@ -1813,7 +1821,7 @@ static int set_wallpaper_from_favorite(void)
     set_wallpaper(chosen);
     char p8[MAX_PATH * 3]; wide_to_utf8(chosen, p8, sizeof(p8));
     LOG_INFO(T("Обои из папки Favorite/%s: %s", "Wallpaper from folder Favorite/%s: %s"), g_cfg.theme, p8);
-    WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(chosen));
+    WCHAR info[300]; name_no_ext(chosen, info, 300);
     notify_core(TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites"), info, g_ic_fav);
     return 1;
 }
@@ -1943,7 +1951,7 @@ static void do_update(void)
     cleanup_old_images();
     set_wallpaper(saved);
     if (pageu[0]) { strncpy(g_cur_page_url, pageu, sizeof(g_cur_page_url) - 1); g_cur_page_url[sizeof(g_cur_page_url)-1] = 0; } /* точная ссылка */
-    WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(saved));
+    WCHAR info[300]; name_no_ext(saved, info, 300);
     notify_core(TW(L"Обои обновлены — с сайта", L"Wallpaper updated — from site"), info, g_ic_site);
 }
 
@@ -1963,7 +1971,7 @@ static void history_back(void)
     g_from_history = 0;
     char p8[MAX_PATH * 3]; wide_to_utf8(g_hist[g_hist_cur], p8, sizeof(p8));
     LOG_INFO(T("История: возврат к %s", "History: back to %s"), p8);
-    WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(g_hist[g_hist_cur]));
+    WCHAR info[300]; name_no_ext(g_hist[g_hist_cur], info, 300);
     notify_core(TW(L"Возврат к прошлым обоям", L"Back to previous wallpaper"), info, g_ic_back);
 }
 
@@ -2011,7 +2019,7 @@ static void do_favorite(void)
     page_url_for_file(dest, page_url, sizeof(page_url));
     if (favorite_api(page_url, 1)) {
         LOG_INFO(T("Изображение добавлено в избранное на сайте", "Image added to favorites on the site"));
-        WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(dest));
+        WCHAR info[300]; name_no_ext(dest, info, 300);
         notify_core(TW(L"Добавлено в избранное", L"Added to favorites"), info, g_ic_fav);
     } else
         LOG_WARN(T("Не удалось добавить в избранное на сайте.", "Failed to add to favorites on the site."));
@@ -2041,7 +2049,7 @@ static void do_unfavorite(void)
     else
         LOG_WARN(T("Не удалось удалить из избранного на сайте.", "Failed to remove from favorites on the site."));
 
-    WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(cur));
+    WCHAR info[300]; name_no_ext(cur, info, 300);
     notify_core(TW(L"Удалено из избранного", L"Removed from favorites"), info, g_ic_fav);
 
     /* локальную копию удаляем и меняем обои только если текущее — файл из папки Favorite */
