@@ -64,7 +64,9 @@ static const WCHAR *TW(const WCHAR *ru, const WCHAR *en) { return g_lang == LANG
 
 /* ================= Тема оформления окна настроек (светлая/тёмная) ========= */
 enum { THEME_LIGHT = 0, THEME_DARK = 1 };
-static int    g_ui_theme = THEME_LIGHT;
+enum { PREF_LIGHT = 0, PREF_DARK = 1, PREF_SYSTEM = 2 };
+static int    g_ui_theme = THEME_LIGHT;    /* фактическая тема (light/dark) */
+static int    g_theme_pref = PREF_LIGHT;   /* выбор: светлая/тёмная/системная */
 static HBRUSH g_br_bg  = NULL;   /* фон окна/статики */
 static HBRUSH g_br_ctl = NULL;   /* фон полей ввода/списка */
 static HBRUSH g_br_nav = NULL;   /* фон левой навигации */
@@ -77,6 +79,25 @@ static COLORREF cr_accent(void){ return RGB(0,120,215); }
 static COLORREF cr_border(void)  { return g_ui_theme ? RGB(82,82,82)  : RGB(205,205,205); }
 static COLORREF cr_btnface(void) { return g_ui_theme ? RGB(55,55,55)  : RGB(251,251,251); }
 static COLORREF cr_btnpress(void){ return g_ui_theme ? RGB(72,72,72)  : RGB(229,229,229); }
+
+/* Тёмная ли тема в Windows (реестр Personalize: AppsUseLightTheme 0=тёмная). */
+static int system_is_dark(void)
+{
+    HKEY k; DWORD val = 1, sz = sizeof(val);
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        0, KEY_READ, &k) == ERROR_SUCCESS) {
+        RegQueryValueExW(k, L"AppsUseLightTheme", NULL, NULL, (BYTE *)&val, &sz);
+        RegCloseKey(k);
+    }
+    return val == 0;
+}
+/* Вычислить фактическую тему из пользовательского выбора. */
+static void resolve_theme(void)
+{
+    g_ui_theme = (g_theme_pref == PREF_SYSTEM) ? (system_is_dark() ? THEME_DARK : THEME_LIGHT)
+               : (g_theme_pref == PREF_DARK)   ? THEME_DARK : THEME_LIGHT;
+}
 
 /* Скруглённый прямоугольник: заливка fill + рамка border (общий helper). */
 static void fill_round(HDC dc, RECT rc, int rad, COLORREF fill, COLORREF border)
@@ -155,8 +176,8 @@ static void theme_brushes_rebuild(void)
 #define BODY_LIMIT      (2*1024*1024)   /* максимум HTML в память */
 #define IMG_LIMIT       (64*1024*1024)  /* максимум картинки      */
 
-static const int g_intervals[8] = { 5, 10, 30, 60, 120, 360, 720, 1440 };
-#define INTERVAL_COUNT 8
+static const int g_intervals[7] = { 5, 10, 30, 60, 120, 360, 720 };
+#define INTERVAL_COUNT 7
 static const int g_favorite_ns[4]   = { 5, 10, 15, 20 };
 #define FAVN_COUNT 4
 
@@ -618,8 +639,12 @@ static int settings_load(void)
           g_lang = LANG_EN;
       else g_lang = LANG_RU; }
     { char th[16];
-      g_ui_theme = (reg_get_str(L"AppTheme", th, sizeof(th)) && !_stricmp(th, "dark"))
-                   ? THEME_DARK : THEME_LIGHT; }
+      if (reg_get_str(L"AppTheme", th, sizeof(th))) {
+          if      (!_stricmp(th, "dark"))   g_theme_pref = PREF_DARK;
+          else if (!_stricmp(th, "system")) g_theme_pref = PREF_SYSTEM;
+          else                              g_theme_pref = PREF_LIGHT;
+      } else g_theme_pref = PREF_LIGHT;
+      resolve_theme(); }
 
     if (!reg_get_str(L"resolution", g_cfg.resolution, sizeof(g_cfg.resolution)) || !g_cfg.resolution[0])
         strcpy(g_cfg.resolution, "1920x1080");
@@ -645,6 +670,7 @@ static int settings_load(void)
     g_cfg.interval_min = reg_get_dword(L"interval_min", 10);
     g_cfg.counter      = reg_get_dword(L"counter", 0);
     if (g_cfg.interval_min < 1) g_cfg.interval_min = 10;
+    if (g_cfg.interval_min > 720) { g_cfg.interval_min = 720; reg_set_dword(L"interval_min", 720); } /* убрали «1д» */
 
     /* save_dir относительно папки exe */
     WCHAR wsave[MAX_PATH];
@@ -3421,8 +3447,10 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         else if (id == IDC_CB_APPTHEME && code == CBN_SELCHANGE) {
             int s = (int)SendMessageW(ctl, CB_GETCURSEL, 0, 0);
-            g_ui_theme = s == 1 ? THEME_DARK : THEME_LIGHT;
-            reg_set_str(L"AppTheme", g_ui_theme == THEME_DARK ? "dark" : "light");
+            g_theme_pref = (s == 1) ? PREF_DARK : (s == 2) ? PREF_SYSTEM : PREF_LIGHT;
+            reg_set_str(L"AppTheme", g_theme_pref == PREF_DARK ? "dark"
+                                   : g_theme_pref == PREF_SYSTEM ? "system" : "light");
+            resolve_theme();
             settings_relaunch();
         }
         else if (id == IDC_BTN_UPDATE && code == BN_CLICKED) {
@@ -3563,8 +3591,15 @@ static void open_settings(void)
     for (int i = 0; i < INTERVAL_COUNT; i++) {
         int v = g_intervals[i]; WCHAR t[32];
         if (v < 60)          _snwprintf(t, 32, TW(L"%d минут", L"%d min"), v);
-        else if (v == 1440)  wcscpy(t, TW(L"24 часа (сутки)", L"24 hours (day)"));
-        else                 _snwprintf(t, 32, TW(L"%d часа", L"%d hours"), v / 60);
+        else {
+            int hrs = v / 60;
+            if (g_lang == LANG_RU) {
+                const WCHAR *u = (hrs == 1) ? L"час" : (hrs >= 2 && hrs <= 4) ? L"часа" : L"часов";
+                _snwprintf(t, 32, L"%d %s", hrs, u);
+            } else {
+                _snwprintf(t, 32, L"%d hour%s", hrs, hrs == 1 ? L"" : L"s");
+            }
+        }
         cb_add(cbInt, t, v);
         if (g_cfg.interval_min == v) SendMessageW(cbInt, CB_SETCURSEL, i, 0);
     }
@@ -3667,8 +3702,10 @@ static void open_settings(void)
     y += 34;
     mk(h, L"STATIC", TW(L"Оформление", L"Appearance"), SS_LEFT, CX, y+4, 110, 20, 0, 2);
     HWND cbTh = mk(h, L"COMBOBOX", NULL, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, VX, y, VW, 120, IDC_CB_APPTHEME, 2);
-    cb_add(cbTh, TW(L"Светлая", L"Light"), 0); cb_add(cbTh, TW(L"Тёмная", L"Dark"), 1);
-    SendMessageW(cbTh, CB_SETCURSEL, g_ui_theme == THEME_DARK ? 1 : 0, 0);
+    cb_add(cbTh, TW(L"Светлая", L"Light"), 0);
+    cb_add(cbTh, TW(L"Тёмная", L"Dark"), 1);
+    cb_add(cbTh, TW(L"Системная", L"System"), 2);
+    SendMessageW(cbTh, CB_SETCURSEL, g_theme_pref, 0);
 
     SendMessageW(GetDlgItem(h, IDC_CHK_NOTIFY),  BM_SETCHECK, g_cfg.notify ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessageW(GetDlgItem(h, IDC_CHK_AUTORUN), BM_SETCHECK, autostart_enabled() ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -4187,6 +4224,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_TOAST:
         toast_show();
         return 0;
+    case WM_SETTINGCHANGE:
+        /* система сменила светлую/тёмную тему — если выбрано «Системная», подхватываем */
+        if (g_theme_pref == PREF_SYSTEM && lp && !wcscmp((const WCHAR *)lp, L"ImmersiveColorSet")) {
+            int old = g_ui_theme;
+            resolve_theme();
+            if (old != g_ui_theme && g_set_hwnd)
+                PostMessageW(g_hwnd, WM_APP_RELAUNCH, (WPARAM)g_set_page, 0);
+        }
+        break;
     case WM_TIMER:
         if (wp == TIMER_ID && !g_paused) run_async(IDM_UPDATE);
         else if (wp == UPD_TIMER_ID) run_update_async(1, g_cfg.auto_update); /* тихая автопроверка */
