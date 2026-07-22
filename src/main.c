@@ -1984,19 +1984,27 @@ static void do_favorite(void)
         return;
     }
 
-    SHCreateDirectoryExW(NULL, g_favorite_dir, NULL);
     WCHAR dest[MAX_PATH];
-    /* если картинка уже в папке избранного — не копируем, работаем по ней */
-    if (StrStrIW(cur, g_favorite_dir) == cur) {
-        wcscpy(dest, cur);
+    /* Локальную копию храним только когда включён режим «из избранного»
+     * (каждая N-я). В режиме «Без избранного» локальные копии не нужны —
+     * добавляем только на сайт, не занимая место на диске. */
+    if (g_cfg.favorite_every_n > 0) {
+        SHCreateDirectoryExW(NULL, g_favorite_dir, NULL);
+        /* если картинка уже в папке избранного — не копируем, работаем по ней */
+        if (StrStrIW(cur, g_favorite_dir) == cur) {
+            wcscpy(dest, cur);
+        } else {
+            _snwprintf(dest, MAX_PATH, L"%s\\%s", g_favorite_dir, PathFindFileNameW(cur));
+            if (GetFileAttributesW(dest) == INVALID_FILE_ATTRIBUTES)
+                CopyFileW(cur, dest, FALSE);
+            LOG_INFO(T("Изображение скопировано в папку Favorite/%s", "Image copied to folder Favorite/%s"), g_cfg.theme);
+            g_from_history = 1;              /* служебный re-point, не в историю */
+            set_wallpaper(dest); /* переносим «текущую» на копию из Favorite */
+            g_from_history = 0;
+        }
     } else {
-        _snwprintf(dest, MAX_PATH, L"%s\\%s", g_favorite_dir, PathFindFileNameW(cur));
-        if (GetFileAttributesW(dest) == INVALID_FILE_ATTRIBUTES)
-            CopyFileW(cur, dest, FALSE);
-        LOG_INFO(T("Изображение скопировано в папку Favorite/%s", "Image copied to folder Favorite/%s"), g_cfg.theme);
-        g_from_history = 1;              /* служебный re-point, не в историю */
-        set_wallpaper(dest); /* переносим «текущую» на копию из Favorite */
-        g_from_history = 0;
+        wcscpy(dest, cur);   /* без локальной копии — работаем по текущему файлу */
+        LOG_INFO(T("Локальная копия не создаётся (режим «Без избранного»).", "No local copy (No favorites mode)."));
     }
 
     char page_url[600];
@@ -2017,23 +2025,30 @@ static void do_unfavorite(void)
     }
     WCHAR cur[MAX_PATH];
     wcsncpy(cur, g_current_image, MAX_PATH - 1); cur[MAX_PATH - 1] = 0;
-    if (!cur[0] || StrStrIW(cur, g_favorite_dir) != cur) {
-        LOG_ERROR(T("Текущие обои не из папки Favorite — удаление из избранного невозможно.", "Current wallpaper is not from the Favorite folder — cannot remove from favorites."));
-        notify_user(TW(L"GoodFon: ошибка", L"GoodFon: error"), TW(L"Текущие обои не из папки избранного.", L"Current wallpaper is not from the favorites folder."));
+    if (!cur[0] || GetFileAttributesW(cur) == INVALID_FILE_ATTRIBUTES) {
+        LOG_ERROR(T("Нет текущей картинки для удаления из избранного.", "No current image to unfavorite."));
+        notify_core(TW(L"GoodFon: ошибка", L"GoodFon: error"), TW(L"Нет текущей картинки.", L"No current image."), g_ic_warn);
         return;
     }
+    int is_local_fav = (StrStrIW(cur, g_favorite_dir) == cur);
+
     char page_url[600];
-    page_url_for_file(cur, page_url, sizeof(page_url));
+    if (g_cur_page_url[0]) { strncpy(page_url, g_cur_page_url, sizeof(page_url) - 1); page_url[sizeof(page_url) - 1] = 0; }
+    else page_url_for_file(cur, page_url, sizeof(page_url));
+
     if (favorite_api(page_url, 0))
         LOG_INFO(T("Изображение удалено из избранного на сайте", "Image removed from favorites on the site"));
     else
         LOG_WARN(T("Не удалось удалить из избранного на сайте.", "Failed to remove from favorites on the site."));
-    if (DeleteFileW(cur)) {
-        LOG_INFO(T("Файл удалён из папки Favorite", "File deleted from Favorite folder"));
-        WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(cur));
-        notify_core(TW(L"Удалено из избранного", L"Removed from favorites"), info, g_ic_fav);
+
+    WCHAR info[300]; _snwprintf(info, 300, L"%s", PathFindFileNameW(cur));
+    notify_core(TW(L"Удалено из избранного", L"Removed from favorites"), info, g_ic_fav);
+
+    /* локальную копию удаляем и меняем обои только если текущее — файл из папки Favorite */
+    if (is_local_fav) {
+        if (DeleteFileW(cur)) LOG_INFO(T("Файл удалён из папки Favorite", "File deleted from Favorite folder"));
+        do_update(); /* текущий файл избранного удалён — ставим новую */
     }
-    do_update(); /* сразу ставим новую */
 }
 
 /* ================= Синхронизация избранного с сайтом ================= */
