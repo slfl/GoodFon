@@ -3675,17 +3675,17 @@ static void open_settings(void)
 
     /* ---- страница 2: Дополнительно ---- */
     y = 46;
+    /* верхняя строка: слева уведомления, справа автозапуск */
     mk(h, L"BUTTON", TW(L"Включить уведомления", L"Enable notifications"),
-       WS_TABSTOP | BS_AUTOCHECKBOX, CX, y, 360, 22, IDC_CHK_NOTIFY, 2);
-    y += 30;
+       WS_TABSTOP | BS_AUTOCHECKBOX, CX, y, 178, 22, IDC_CHK_NOTIFY, 2);
+    mk(h, L"BUTTON", TW(L"Автозапуск с Windows", L"Start with Windows"),
+       WS_TABSTOP | BS_AUTOCHECKBOX, 380, y, 176, 22, IDC_CHK_AUTORUN, 2);
+    y += 38;
     mk(h, L"STATIC", TW(L"Тип уведомлений", L"Notification type"), SS_LEFT, CX, y+4, 110, 20, 0, 2);
     HWND cbNS = mk(h, L"COMBOBOX", NULL, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, VX, y, VW, 120, IDC_CB_NOTIFYSTYLE, 2);
     cb_add(cbNS, TW(L"Системные", L"System"), 0);
     cb_add(cbNS, TW(L"Программные", L"In-app"), 1);
     SendMessageW(cbNS, CB_SETCURSEL, g_cfg.notify_style == 1 ? 1 : 0, 0);
-    y += 34;
-    mk(h, L"BUTTON", TW(L"Автозапуск с Windows", L"Start with Windows"),
-       WS_TABSTOP | BS_AUTOCHECKBOX, CX, y, 360, 22, IDC_CHK_AUTORUN, 2);
     y += 34;
     mk(h, L"STATIC", TW(L"Домен сайта", L"Site domain"), SS_LEFT, CX, y+4, 110, 20, 0, 2);
     HWND cbDom = mk(h, L"COMBOBOX", NULL, CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, VX, y, VW, 120, IDC_CB_DOMAIN, 2);
