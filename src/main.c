@@ -320,7 +320,6 @@ static HWND  g_hwnd;
 static time_t g_notify_snooze_until = 0; /* уведомления отложены до этого времени (0 = нет) */
 static HWND  g_set_hwnd = NULL;         /* окно настроек (объявлено рано: нужно worker'у) */
 static int   g_update_status = 0;       /* 0 нет,1 проверка,2 актуально,3 ставится,4 ошибка,5 доступна */
-static WCHAR g_new_version[32] = L"";   /* версия найденного обновления (для статуса/уведомления) */
 #define WM_APP_LOGINRESULT  (WM_APP + 3)
 #define WM_APP_UPDATERESULT (WM_APP + 4)
 #define WM_APP_STATS        (WM_APP + 5)
@@ -2410,25 +2409,6 @@ static void upd_status(int code)
 }
 
 /* Прочитать версию ("2.5") из ресурса версии exe-файла. 1 = успех. */
-static int get_exe_version(const WCHAR *path, WCHAR *out, int outsz)
-{
-    DWORD dummy, sz = GetFileVersionInfoSizeW(path, &dummy);
-    if (!sz) return 0;
-    void *buf = malloc(sz);
-    if (!buf) return 0;
-    int ok = 0;
-    if (GetFileVersionInfoW(path, 0, sz, buf)) {
-        VS_FIXEDFILEINFO *fi = NULL; UINT len = 0;
-        if (VerQueryValueW(buf, L"\\", (void **)&fi, &len) && fi) {
-            _snwprintf(out, outsz, L"%u.%u",
-                       HIWORD(fi->dwFileVersionMS), LOWORD(fi->dwFileVersionMS));
-            ok = 1;
-        }
-    }
-    free(buf);
-    return ok;
-}
-
 static void check_update(int silent, int install)
 {
     WCHAR self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
@@ -2492,24 +2472,16 @@ static void check_update(int silent, int install)
         return;
     }
 
-    /* найдена новая версия — читаем её номер для статуса/уведомления */
-    if (!get_exe_version(upd, g_new_version, 32)) wcscpy(g_new_version, L"");
-    LOG_INFO(T("Доступна новая версия: %ls", "New version available: %ls"),
-             g_new_version[0] ? g_new_version : L"?");
+    /* найдена новая версия */
+    LOG_INFO(T("Доступна новая версия!", "A new version is available!"));
 
     if (!install) {
         /* только уведомить — установку пользователь запустит сам */
         upd_status(5);
         DeleteFileW(upd);
         if (g_cfg.update_notify || !silent) {
-            WCHAR m[128];
-            if (g_new_version[0])
-                _snwprintf(m, 128, TW(L"Доступна новая версия %ls. Откройте «Обновления».",
-                                      L"New version %ls available. Open «Updates»."), g_new_version);
-            else
-                wcscpy(m, TW(L"Доступна новая версия. Откройте «Обновления».",
-                             L"A new version is available. Open «Updates»."));
-            notify_core(APP_NAME, m, g_ic_newver);
+            notify_core(APP_NAME, TW(L"Доступна новая версия. Откройте «Обновления».",
+                                     L"A new version is available. Open «Updates»."), g_ic_newver);
         }
         return;
     }
@@ -3482,11 +3454,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_UPDATERESULT: {
         g_update_status = (int)wp;
         HWND st = GetDlgItem(h, IDC_ST_UPDATE);
-        WCHAR avail[128];
-        if (g_new_version[0])
-            _snwprintf(avail, 128, TW(L"Доступна новая версия %ls.", L"New version %ls available."), g_new_version);
-        else
-            wcscpy(avail, TW(L"Доступна новая версия.", L"A new version is available."));
+        const WCHAR *avail = TW(L"Доступна новая версия!", L"A new version is available!");
         const WCHAR *txt =
             g_update_status == 1 ? TW(L"Проверяю обновления…", L"Checking for updates…") :
             g_update_status == 2 ? TW(L"У вас последняя версия.", L"You have the latest version.") :
