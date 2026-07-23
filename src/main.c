@@ -1393,7 +1393,11 @@ static int dir_count(const WCHAR *dir)
 /* ================= Логика GoodFon ================= */
 
 static void base_url(char *out, size_t sz)
-{ snprintf(out, sz, "https://%s", g_hosts[g_active_domain]); }
+{
+    int d = g_active_domain;
+    if (d < 0 || d > 1) d = (!strcmp(g_cfg.domain_pref, "ru")) ? 1 : 0;  /* домен ещё не выбран (нет логина) */
+    snprintf(out, sz, "https://%s", g_hosts[d]);
+}
 
 static int domain_order(int order[2])
 {
@@ -1458,9 +1462,11 @@ static int do_login(void)
 /* Выбор домена + сессии: кэш напрямую, иначе логин с повтором. 1 = ок */
 static int ensure_session(void)
 {
-    /* Нет логина/пароля — не дёргаем сеть впустую, работаем из локального избранного. */
+    /* Нет логина/пароля — работаем анонимно: публичные разделы сайта доступны
+       без входа (кроме «Эротики»). Просто выбираем домен. */
     if (!is_authorized()) {
-        LOG_INFO(T("Вход не выполняется: логин и пароль не заданы.", "Sign-in skipped: login and password are not set."));
+        if (g_active_domain < 0) { int order[2]; domain_order(order); g_active_domain = order[0]; }
+        LOG_INFO(T("Работаем без входа — доступны публичные разделы.", "Working without sign-in — public sections available."));
         return 0;
     }
     int order[2]; domain_order(order);
@@ -1941,11 +1947,18 @@ static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz, char *page
 
 static void do_update(void)
 {
-    if (!ensure_session()) {
-        if (is_authorized())
-            LOG_ERROR(T("Ни один домен недоступен или вход не выполнен.", "No domain available or sign-in failed."));
-        else
-            LOG_INFO(T("Вход не выполнен (нет логина) — берём картинку локально.", "Not signed in (no login) — using a local image."));
+    int authed = ensure_session();   /* 1 = вошли, 0 = аноним/без входа */
+
+    /* «Эротика» доступна только после авторизации */
+    if (!authed && !_stricmp(g_cfg.theme, "erotic")) {
+        LOG_WARN(T("Раздел \"erotic\" требует входа — берём картинку локально.", "Section 'erotic' requires sign-in — using a local image."));
+        g_cfg.counter++; counter_save();
+        fallback_local(0);
+        return;
+    }
+    /* Сеть недоступна (домен не выбран) — локально */
+    if (g_active_domain < 0) {
+        LOG_ERROR(T("Ни один домен недоступен — берём картинку локально.", "No domain available — using a local image."));
         g_cfg.counter++; counter_save();
         fallback_local(0);
         return;
@@ -1953,7 +1966,8 @@ static void do_update(void)
 
     g_cfg.counter++;
     counter_save();
-    LOG_INFO(T("Запуск #%d (из Favorite каждые %d)", "Run #%d (from Favorite every %d)"), g_cfg.counter, g_cfg.favorite_every_n);
+    LOG_INFO(T("Запуск #%d (из Favorite каждые %d)%s", "Run #%d (from Favorite every %d)%s"),
+             g_cfg.counter, g_cfg.favorite_every_n, authed ? "" : T(" [без входа]", " [anonymous]"));
     if (g_cfg.favorite_every_n > 0 && g_cfg.counter >= g_cfg.favorite_every_n) {
         g_cfg.counter = 0; counter_save();
         if (set_wallpaper_from_favorite()) return;
@@ -3302,11 +3316,11 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             int s = (int)SendMessageW(ctl, CB_GETCURSEL, 0, 0);
             int idx = (int)SendMessageW(ctl, CB_GETITEMDATA, s, 0);
             if (idx != MIX_ID && idx != SANDBOX_ID && !_stricmp(g_themes_all[idx].slug, "erotic") && !is_authorized()) {
-                MessageBoxW(h, TW(L"Доступно после авторизации.", L"Available after sign in."),
-                            APP_NAME, MB_ICONINFORMATION);
+                /* «Эротика» недоступна без входа — молча возвращаем выбор на текущую тему */
                 int cnt = (int)SendMessageW(ctl, CB_GETCOUNT, 0, 0);
                 for (int i = 0; i < cnt; i++) {
                     int di = (int)SendMessageW(ctl, CB_GETITEMDATA, i, 0);
+                    if (di == MIX_ID || di == SANDBOX_ID) continue;   /* не индексы тем */
                     if (!_stricmp(g_themes_all[di].slug, g_cfg.theme)) {
                         SendMessageW(ctl, CB_SETCURSEL, i, 0); break;
                     }
@@ -3382,11 +3396,9 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         else if (id == IDC_BTN_SIGNOUT && code == BN_CLICKED) {
             account_logout();
-            SetDlgItemTextW(h, IDC_ED_LOGIN, L"");
-            SetDlgItemTextW(h, IDC_ED_PASS,  L"");
             g_login_status = 0;
-            SetDlgItemTextW(h, IDC_ST_STATUS, L"");
-            settings_set_page(h, 1);
+            run_async(IDM_UPDATE);     /* сменить обои — уйти с эротики визуально */
+            settings_relaunch();       /* пересобрать окно: список тем без эротики, тема girls */
         }
         else if (id == IDC_LNK_REG && code == STN_CLICKED) {
             account_register();
@@ -3574,15 +3586,15 @@ static void open_settings(void)
       else if (!_stricmp(g_cfg.theme, SANDBOX_SLUG)) SendMessageW(cbTheme, CB_SETCURSEL, 1, 0);
       for (int i = 0; i < THEME_COUNT; i++) order[i] = i;
       qsort(order, THEME_COUNT, sizeof(int), theme_cmp);
+      int pos = 2;   /* 0 = MIX, 1 = Песочница */
       for (int k = 0; k < THEME_COUNT; k++) {
           int i = order[k];
-          WCHAR lbl[96];
-          if (!_stricmp(g_themes_all[i].slug, "erotic") && !is_authorized())
-              _snwprintf(lbl, 96, L"%s  %s", theme_name(i), TW(L"— нужен вход", L"— sign in required"));
-          else { wcsncpy(lbl, theme_name(i), 95); lbl[95] = 0; }
+          if (!_stricmp(g_themes_all[i].slug, "erotic") && !is_authorized()) continue; /* без входа — скрыть */
+          WCHAR lbl[96]; wcsncpy(lbl, theme_name(i), 95); lbl[95] = 0;
           cb_add(cbTheme, lbl, i);
           if (!_stricmp(g_themes_all[i].slug, g_cfg.theme))
-              SendMessageW(cbTheme, CB_SETCURSEL, k + 2, 0);   /* +2: MIX(0) и Песочница(1) */
+              SendMessageW(cbTheme, CB_SETCURSEL, pos, 0);
+          pos++;
       } }
 
     y += 40;
@@ -3960,6 +3972,10 @@ static void select_theme(int idx)
     else if (idx == SANDBOX_ID)             slug = SANDBOX_SLUG;
     else if (idx >= 0 && idx < THEME_COUNT) slug = g_themes_all[idx].slug;
     else return;
+    if (!_stricmp(slug, "erotic") && !is_authorized()) {   /* эротика — только с авторизацией */
+        LOG_WARN(T("Тема \"erotic\" недоступна без авторизации — пропущено.", "Theme 'erotic' requires sign in — skipped."));
+        return;
+    }
     strncpy(g_cfg.theme, slug, sizeof(g_cfg.theme) - 1);
     g_cfg.theme[sizeof(g_cfg.theme) - 1] = 0;
     reg_set_str(L"theme", g_cfg.theme);
