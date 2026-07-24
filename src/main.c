@@ -1935,7 +1935,7 @@ static int favorite_next(const WCHAR *cur, WCHAR *out, int outsz)
    Используется для картинок из избранного (локальный файл, но инфо берём с сайта). */
 static void fetch_page_info(void)
 {
-    if (g_active_domain < 0 || !g_cur_page_url[0]) return;
+    if (!g_cur_page_url[0]) return;   /* ссылка абсолютная; если офлайн — GET просто не удастся */
     HttpResp r;
     if (http_request("GET", g_cur_page_url, NULL, NULL, 15000, BODY_LIMIT, &r) && r.status == 200 && r.body) {
         int pr = 0, phr = 0, pdl = -1; char pvp[96] = "";
@@ -2118,7 +2118,7 @@ static void history_back(void)
         notify_core(APP_NAME, TW(L"Предыдущих обоев нет.", L"No previous wallpaper."), g_ic_back);
         return;
     }
-    g_hist_cur = t;
+    g_cur_has_rating = 0; g_cur_downloads = -1; g_cur_vote = 0; g_cur_vote_path[0] = 0;
     g_from_history = 1;
     set_wallpaper(g_hist[g_hist_cur]);
     g_from_history = 0;
@@ -2126,6 +2126,7 @@ static void history_back(void)
     LOG_INFO(T("История: возврат к %s", "History: back to %s"), p8);
     WCHAR info[300]; name_no_ext(g_hist[g_hist_cur], info, 300);
     notify_core(TW(L"Возврат к прошлым обоям", L"Back to previous wallpaper"), info, g_ic_back);
+    fetch_page_info();   /* вернуть и рейтинг/скачивания для этой картинки */
 }
 
 static void do_favorite(void)
