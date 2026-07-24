@@ -1931,9 +1931,28 @@ static int favorite_next(const WCHAR *cur, WCHAR *out, int outsz)
     return 1;
 }
 
+/* Подтянуть с сайта рейтинг/скачивания/vote для текущей страницы (g_cur_page_url).
+   Используется для картинок из избранного (локальный файл, но инфо берём с сайта). */
+static void fetch_page_info(void)
+{
+    if (g_active_domain < 0 || !g_cur_page_url[0]) return;
+    HttpResp r;
+    if (http_request("GET", g_cur_page_url, NULL, NULL, 15000, BODY_LIMIT, &r) && r.status == 200 && r.body) {
+        int pr = 0, phr = 0, pdl = -1; char pvp[96] = "";
+        parse_page_info(r.body, &pr, &phr, &pdl, pvp, sizeof(pvp));
+        g_cur_rating = pr; g_cur_has_rating = phr; g_cur_downloads = pdl; g_cur_vote = 0;
+        strncpy(g_cur_vote_path, pvp, sizeof(g_cur_vote_path) - 1);
+        g_cur_vote_path[sizeof(g_cur_vote_path) - 1] = 0;
+        LOG_INFO(T("Инфо избранного: рейтинг=%d (есть:%d), скачиваний=%d, vote=%hs",
+                   "Favorite info: rating=%d (has:%d), downloads=%d, vote=%hs"),
+                 pr, phr, pdl, pvp[0] ? pvp : "-");
+    }
+    free(r.body);
+}
+
 static int set_wallpaper_from_favorite(void)
 {
-    g_cur_has_rating = 0; g_cur_downloads = -1; g_cur_vote = 0; g_cur_vote_path[0] = 0;  /* из избранного — инфо сайта нет */
+    g_cur_has_rating = 0; g_cur_downloads = -1; g_cur_vote = 0; g_cur_vote_path[0] = 0;  /* сбрасываем; ниже подтянем с сайта */
     char d8[MAX_PATH * 3]; wide_to_utf8(g_favorite_dir, d8, sizeof(d8));
     LOG_INFO(T("Favorite-папка: %s (найдено файлов: %d)", "Favorite folder: %s (files found: %d)"), d8, dir_count(g_favorite_dir));
 
@@ -1948,6 +1967,7 @@ static int set_wallpaper_from_favorite(void)
     LOG_INFO(T("Обои из папки Favorite/%s: %s", "Wallpaper from folder Favorite/%s: %s"), g_cfg.theme, p8);
     WCHAR info[300]; name_no_ext(chosen, info, 300);
     notify_core(TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites"), info, g_ic_fav);
+    fetch_page_info();   /* рейтинг и скачивания — с сайта (картинка локальная) */
     return 1;
 }
 
