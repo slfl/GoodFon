@@ -2118,6 +2118,7 @@ static void history_back(void)
         notify_core(APP_NAME, TW(L"Предыдущих обоев нет.", L"No previous wallpaper."), g_ic_back);
         return;
     }
+    g_hist_cur = t;
     g_cur_has_rating = 0; g_cur_downloads = -1; g_cur_vote = 0; g_cur_vote_path[0] = 0;
     g_from_history = 1;
     set_wallpaper(g_hist[g_hist_cur]);
