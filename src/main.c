@@ -849,9 +849,18 @@ static int http_request(const char *method, const char *url,
     DWORD blen = body ? (DWORD)strlen(body) : 0;
     int ok = 0, attempt;
     for (attempt = 0; attempt < 3; attempt++) {
-        if (!WinHttpSendRequest(hr, hdr, (DWORD)-1L,
-                                (LPVOID)body, blen, blen, 0)) break;
-        if (!WinHttpReceiveResponse(hr, NULL)) break;
+        if (!WinHttpSendRequest(hr, hdr, (DWORD)-1L, (LPVOID)body, blen, blen, 0) ||
+            !WinHttpReceiveResponse(hr, NULL)) {
+            DWORD e = GetLastError();               /* таймаут 12002, обрыв и т.п. */
+            if (attempt < 2) {
+                LOG_WARN(T("HTTP %s %s -> сетевая ошибка %lu, повтор через 2с",
+                           "HTTP %s %s -> network error %lu, retry in 2s"),
+                         method, url, (unsigned long)e);
+                Sleep(2000);
+                continue;
+            }
+            break;                                   /* исчерпали попытки */
+        }
 
         DWORD status = 0, ssz = sizeof(status);
         WinHttpQueryHeaders(hr, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
