@@ -46,6 +46,8 @@ __declspec(dllimport) UINT __stdcall timeEndPeriod(UINT);
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_ID        1
 #define UPD_TIMER_ID    2
+#define INBOX_TIMER_ID  4     /* опрос входящих сообщений */
+#define INBOX_POLL_MS   60000 /* раз в минуту */
 
 /* Обновление с GitHub (raw): сравниваем хэш локального exe с удалённым. */
 #define UPDATE_BASE  L"https://github.com/slfl/GoodFon/raw/refs/heads/main"
@@ -132,6 +134,7 @@ static void theme_brushes_rebuild(void)
 #define IDM_SNOOZE_2H   124
 #define IDM_SNOOZE_4H   125
 #define IDM_SNOOZE_OFF  126   /* отключить насовсем */
+#define IDM_INBOX       127   /* открыть входящие сообщения на сайте */
 #define IDM_FAVORITE        101
 #define IDM_UNFAVORITE      102
 #define IDM_PAUSE       103
@@ -333,6 +336,7 @@ static int   g_update_status = 0;       /* 0 нет,1 проверка,2 акт�
 #define WM_APP_RELAUNCH     (WM_APP + 6)
 #define WM_APP_TOAST        (WM_APP + 7)   /* показать программное уведомление (в UI-потоке) */
 #define WM_APP_VOTED        (WM_APP + 8)   /* рейтинг обновлён — перерисовать карточку */
+#define WM_APP_INBOX        (WM_APP + 9)   /* результат опроса сообщений (wp = N+1) */
 
 /* Профильная статистика с сайта (для страницы "Аккаунт"). */
 typedef struct {
@@ -367,7 +371,7 @@ static void log_open(int debug)
 
     /* Консоль родителя (запуск из терминала) либо файл goodfon.log */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        freopen("CONOUT$", "w", stdout);
+        if (!freopen("CONOUT$", "w", stdout)) { /* нет консоли — не критично */ }
         g_log_console = 1;
         SetConsoleOutputCP(CP_UTF8);
         return;
@@ -1266,7 +1270,7 @@ static HICON make_toast_icon(const WCHAR *glyph, COLORREF bg)
 }
 
 static HICON g_ic_site = NULL, g_ic_fav = NULL, g_ic_check = NULL, g_ic_newver = NULL;
-static HICON g_ic_back = NULL, g_ic_warn = NULL, g_ic_ok = NULL, g_ic_info = NULL;
+static HICON g_ic_back = NULL, g_ic_warn = NULL, g_ic_ok = NULL, g_ic_info = NULL, g_ic_mail = NULL;
 static void ensure_toast_icons(void)
 {
     if (g_ic_site) return;
@@ -1278,6 +1282,7 @@ static void ensure_toast_icons(void)
     g_ic_warn   = make_toast_icon(L"\uE7BA", RGB(224, 150, 30));   /* Warning — янтарный */
     g_ic_ok     = make_toast_icon(L"\uE73E", RGB(46, 164, 79));    /* CheckMark — зелёный */
     g_ic_info   = make_toast_icon(L"\uE946", RGB(90, 110, 140));   /* Info — сине-серый */
+    g_ic_mail   = make_toast_icon(L"\uE715", RGB(230, 126, 34));   /* Mail — оранжевый */
 }
 
 static WCHAR g_toast_title[128] = L"";
@@ -2470,6 +2475,7 @@ static DWORD WINAPI worker_thread(LPVOID param)
                 notify_core(L"GoodFon", TW(L"Авторизация успешна.", L"Authorization successful."), g_ic_ok);
                 if (g_set_hwnd) PostMessageW(g_set_hwnd, WM_APP_LOGINRESULT, 1, 0);
                 stats_refresh_async();
+                if (g_hwnd) PostMessageW(g_hwnd, WM_APP_INBOX, 0, 1);   /* скоро проверить сообщения */
             } else {
                 LOG_WARN(T("Авторизация через меню не удалась (проверьте логин и пароль).", "Sign-in from menu failed (check login and password)."));
                 notify_core(L"GoodFon", TW(L"Не удалось войти: проверьте логин и пароль.", L"Sign-in failed: check login and password."), g_ic_warn);
@@ -2684,7 +2690,7 @@ static void account_logout(void)
     notify_core(L"GoodFon", TW(L"Выход из аккаунта выполнен.", L"Signed out."), g_ic_ok);
 
     stats_clear();
-    { HKEY k = reg_open(KEY_WRITE); if (k) { RegDeleteValueW(k, L"profile_stats"); RegCloseKey(k); } }
+    { HKEY hk = reg_open(KEY_WRITE); if (hk) { RegDeleteValueW(hk, L"profile_stats"); RegCloseKey(hk); } }
 }
 
 /* ===================== Профильная статистика ===================== */
@@ -2919,6 +2925,61 @@ static void stats_refresh_async(void)
 {
     HANDLE t = CreateThread(NULL, 0, stats_thread, NULL, 0, NULL);
     if (t) CloseHandle(t);
+}
+
+
+/* ===================== Входящие сообщения ===================== */
+/* Счётчик берём из шапки любой страницы (не /inbox/ — её открытие помечает
+   сообщения прочитанными): <a class=headline__user__inbox href=…/inbox/>2</a>.
+   Пусто = 0; ссылки нет вовсе = мы не залогинены (-1). */
+static int  g_inbox_count = 0;
+static WCHAR g_inbox_lbl[48] = L"";
+static volatile LONG g_inbox_busy = 0;
+
+static int parse_inbox(const char *html)
+{
+    const char *p = strstr(html, "headline__user__inbox");
+    if (!p) return -1;
+    p = strchr(p, '>');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') p++;
+    return (*p >= '0' && *p <= '9') ? atoi(p) : 0;
+}
+
+static DWORD WINAPI inbox_thread(LPVOID param)
+{
+    (void)param;
+    int cnt = -1;
+    char base[64]; base_url(base, sizeof(base));
+    char url[256]; snprintf(url, sizeof(url), "%s/user/%s/", base, g_cfg.login);
+    HttpResp r;
+    if (http_request("GET", url, NULL, NULL, 15000, BODY_LIMIT, &r) && r.status == 200 && r.body)
+        cnt = parse_inbox(r.body);
+    free(r.body);
+    InterlockedExchange(&g_inbox_busy, 0);
+    if (g_hwnd) PostMessageW(g_hwnd, WM_APP_INBOX, (WPARAM)(cnt + 1), 0);
+    return 0;
+}
+
+static void inbox_poll_async(void)
+{
+    if (!is_authorized()) return;
+    if (g_busy) return;                                   /* идёт смена обоев — в следующий раз */
+    if (InterlockedCompareExchange(&g_inbox_busy, 1, 0) != 0) return;
+    HANDLE t = CreateThread(NULL, 0, inbox_thread, NULL, 0, NULL);
+    if (t) CloseHandle(t); else InterlockedExchange(&g_inbox_busy, 0);
+}
+
+/* Подсказка иконки трея: с числом непрочитанных, если они есть */
+static void tray_tip_update(void)
+{
+    if (g_inbox_count > 0)
+        _snwprintf(g_nid.szTip, 128, TW(L"GoodFon — сообщений: %d", L"GoodFon — messages: %d"), g_inbox_count);
+    else
+        wcscpy(g_nid.szTip, TW(L"GoodFon — смена обоев", L"GoodFon — wallpaper changer"));
+    g_nid.uFlags = NIF_TIP;
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
 }
 
 /* ================= Трей и меню ================= */
@@ -3494,6 +3555,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         else if (id == IDC_BTN_SIGNOUT && code == BN_CLICKED) {
             account_logout();
             g_login_status = 0;
+            g_inbox_count = 0; tray_tip_update();
             run_async(IDM_UPDATE);     /* сменить обои — уйти с эротики визуально */
             settings_relaunch();       /* пересобрать окно: список тем без эротики, тема girls */
         }
@@ -4052,6 +4114,10 @@ static void show_menu(void)
     g_min = 0;
     HMENU m = CreatePopupMenu();
     menu_add_card(m, g_card_name, g_card_sub, IDM_OPENSITE, !have_cur);
+    if (g_inbox_count > 0 && is_authorized()) {
+        _snwprintf(g_inbox_lbl, 48, TW(L"Сообщения: %d", L"Messages: %d"), g_inbox_count);
+        menu_add(m, L"\uE715", g_inbox_lbl, IDM_INBOX, 0, 0);   /* Mail */
+    }
     menu_sep(m);
     menu_add(m, L"\uE72C", TW(L"Сменить обои сейчас", L"Change wallpaper now"), IDM_UPDATE, 0, 0);
     menu_add(m, L"\uE7A7", TW(L"Вернуть прошлые обои", L"Restore previous wallpaper"), IDM_BACK, 0, g_hist_cur <= 0);
@@ -4438,6 +4504,22 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_TOAST:
         toast_show();
         return 0;
+    case WM_APP_INBOX:
+        if (lp == 1) {                       /* «проверь поскорее» (после входа) */
+            SetTimer(h, INBOX_TIMER_ID, 4000, NULL);
+            return 0;
+        }
+        if ((int)wp > 0) {                   /* wp = N+1; 0 = нет данных (не залогинены / сеть) */
+            int cnt = (int)wp - 1;
+            if (cnt > g_inbox_count) {
+                LOG_INFO(T("Новые сообщения: %d", "New messages: %d"), cnt);
+                WCHAR t[96];
+                _snwprintf(t, 96, TW(L"Непрочитанных сообщений: %d", L"Unread messages: %d"), cnt);
+                notify_core(TW(L"Новое сообщение", L"New message"), t, g_ic_mail);
+            }
+            if (cnt != g_inbox_count) { g_inbox_count = cnt; tray_tip_update(); }
+        }
+        return 0;
     case WM_APP_VOTED:
         if (g_menu_hwnd) {   /* перерисовать карточку с новым рейтингом, не закрывая меню */
             HDC dc = GetDC(g_menu_hwnd);
@@ -4457,6 +4539,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         if (wp == TIMER_ID && !g_paused) run_async(IDM_UPDATE);
         else if (wp == UPD_TIMER_ID) run_update_async(1, g_cfg.auto_update); /* тихая автопроверка */
+        else if (wp == INBOX_TIMER_ID) {
+            SetTimer(h, INBOX_TIMER_ID, INBOX_POLL_MS, NULL);   /* дальше — штатный интервал */
+            inbox_poll_async();
+        }
         else if (wp == MARQUEE_TIMER_ID) {
             /* время-зависимая прокрутка: позиция считается по прошедшему времени,
                поэтому движение ровное даже при неравномерном таймере */
@@ -4509,6 +4595,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         else if (id == IDM_SNOOZE_OFF) {
             g_notify_snooze_until = 0;
             g_cfg.notify = 0; reg_set_dword(L"notify", 0);   /* насовсем (до включения) */
+        }
+        else if (id == IDM_INBOX) {
+            char base[64], url[128]; base_url(base, sizeof(base));
+            snprintf(url, sizeof(url), "%s/inbox/", base);
+            WCHAR wurl[128]; utf8_to_wide(url, wurl, 128);
+            ShellExecuteW(NULL, L"open", wurl, NULL, NULL, SW_SHOWNORMAL);
+            g_inbox_count = 0; tray_tip_update();               /* сайт пометит прочитанными */
         }
         else if (id == IDM_SETTINGS) open_settings();
         else if (id == IDM_EXIT) DestroyWindow(h);
@@ -4585,6 +4678,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdline, int show)
     tray_add();
     apply_interval();
     apply_update_interval();
+    SetTimer(g_hwnd, INBOX_TIMER_ID, 15000, NULL);   /* первая проверка сообщений через 15 с */
     if (g_cfg.check_on_startup)
         run_update_async(1, g_cfg.auto_update);   /* тихая проверка при запуске */
     /* синхронизация избранного + первая смена — в фоне, чтобы трей появился сразу */
