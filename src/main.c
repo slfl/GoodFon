@@ -42,7 +42,7 @@ __declspec(dllimport) UINT __stdcall timeEndPeriod(UINT);
 /* ================= Константы ================= */
 
 #define APP_NAME        L"GoodFon"
-#define APP_VERSION     "2.6"
+#define APP_VERSION     "2.7"
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_ID        1
 #define UPD_TIMER_ID    2
@@ -2539,7 +2539,7 @@ static void upd_status(int code)
     if (g_set_hwnd) PostMessageW(g_set_hwnd, WM_APP_UPDATERESULT, code, 0);
 }
 
-/* Прочитать версию ("2.6") из ресурса версии exe-файла. 1 = успех. */
+/* Прочитать версию ("2.7") из ресурса версии exe-файла. 1 = успех. */
 static void check_update(int silent, int install)
 {
     WCHAR self[MAX_PATH]; GetModuleFileNameW(NULL, self, MAX_PATH);
@@ -3350,7 +3350,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HGDIOBJ of = SelectObject(dc, g_set_font_title);
             SetTextColor(dc, cr_txt());
             RECT rt = { x, y, x + w, y + 26 };
-            DrawTextW(dc, L"GoodFon 2.6", -1, &rt, DT_LEFT | DT_SINGLELINE);
+            DrawTextW(dc, L"GoodFon 2.7", -1, &rt, DT_LEFT | DT_SINGLELINE);
             y += 34;
             /* описание с переносом по словам */
             SelectObject(dc, g_set_font);
