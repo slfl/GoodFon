@@ -2935,6 +2935,8 @@ static void stats_refresh_async(void)
 static int  g_inbox_count = 0;
 static WCHAR g_inbox_lbl[48] = L"";
 static volatile LONG g_inbox_busy = 0;
+static char g_inbox_from[200] = "";   /* отправители непрочитанных: "a, b, c" */
+static char g_inbox_user[40]  = "";   /* если отправитель ровно один — его логин */
 
 static int parse_inbox(const char *html)
 {
@@ -2947,6 +2949,58 @@ static int parse_inbox(const char *html)
     return (*p >= '0' && *p <= '9') ? atoi(p) : 0;
 }
 
+/* Значение атрибута name= внутри одного тега [tag, end): с кавычками и без. */
+static int tag_attr(const char *tag, const char *end, const char *name, char *out, int outsz)
+{
+    size_t nl = strlen(name);
+    for (const char *p = tag; p + nl < end; p++) {
+        if (strncmp(p, name, nl) || (p > tag && p[-1] != ' ')) continue;
+        const char *v = p + nl; char q = 0;
+        if (*v == '"' || *v == '\'') q = *v++;
+        int i = 0;
+        while (v < end && *v && i < outsz - 1 &&
+               (q ? *v != q : (*v != ' ' && *v != '>' && *v != '/'))) out[i++] = *v++;
+        out[i] = 0;
+        return 1;
+    }
+    out[0] = 0;
+    return 0;
+}
+
+/* Список /inbox/: собрать логины диалогов с data-unread > 0.
+   Возвращает число таких отправителей; from = "a, b, c", one = логин при единственном. */
+static int parse_inbox_senders(const char *html, char *from, int fromsz, char *one, int onesz)
+{
+    int n = 0; from[0] = 0; one[0] = 0;
+    const char *p = html;
+    while ((p = strstr(p, "js-inbox-dialog")) != NULL) {
+        const char *ts = p; while (ts > html && *ts != '<') ts--;   /* начало тега <a */
+        const char *te = strchr(p, '>');
+        if (!te) break;
+        p = te;
+        if (strncmp(ts, "<a", 2)) continue;                          /* пропускаем чужие теги */
+        char ur[12], us[64];
+        tag_attr(ts, te, "data-unread=", ur, sizeof(ur));
+        tag_attr(ts, te, "data-user=",   us, sizeof(us));
+        if (atoi(ur) <= 0 || !us[0]) continue;                       /* прочитан / шаблон */
+        for (char *c = us; *c; c++)                                  /* только безопасные символы */
+            if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                  (*c >= '0' && *c <= '9') || *c == '-' || *c == '_' || *c == '.')) *c = '_';
+        if (n == 0) { strncpy(one, us, onesz - 1); one[onesz - 1] = 0; }
+        if (n < 3) {
+            size_t fl = strlen(from);
+            snprintf(from + fl, fromsz - fl, "%s%s", n ? ", " : "", us);
+        }
+        n++;
+    }
+    if (n > 3) {
+        size_t fl = strlen(from);
+        snprintf(from + fl, fromsz - fl, T(" и ещё %d", " +%d more"), n - 3);
+    }
+    if (n != 1) one[0] = 0;
+    return n;
+}
+
 static DWORD WINAPI inbox_thread(LPVOID param)
 {
     (void)param;
@@ -2957,6 +3011,22 @@ static DWORD WINAPI inbox_thread(LPVOID param)
     if (http_request("GET", url, NULL, NULL, 15000, BODY_LIMIT, &r) && r.status == 200 && r.body)
         cnt = parse_inbox(r.body);
     free(r.body);
+
+    /* Пришло новое — один раз читаем список /inbox/ (он не помечает прочитанным;
+       прочитанным помечает только открытие диалога /inbox/?user=…). */
+    if (cnt > g_inbox_count) {
+        char from[200] = "", one[40] = "";
+        snprintf(url, sizeof(url), "%s/inbox/", base);
+        HttpResp li;
+        if (http_request("GET", url, NULL, NULL, 15000, BODY_LIMIT, &li) && li.status == 200 && li.body) {
+            int ns = parse_inbox_senders(li.body, from, sizeof(from), one, sizeof(one));
+            LOG_INFO(T("Непрочитанные от: %s (диалогов: %d)", "Unread from: %s (dialogs: %d)"),
+                     from[0] ? from : "-", ns);
+        }
+        free(li.body);
+        strcpy(g_inbox_from, from);
+        strcpy(g_inbox_user, one);
+    }
     InterlockedExchange(&g_inbox_busy, 0);
     if (g_hwnd) PostMessageW(g_hwnd, WM_APP_INBOX, (WPARAM)(cnt + 1), 0);
     return 0;
@@ -2974,7 +3044,12 @@ static void inbox_poll_async(void)
 /* Подсказка иконки трея: с числом непрочитанных, если они есть */
 static void tray_tip_update(void)
 {
-    if (g_inbox_count > 0)
+    if (g_inbox_count > 0 && g_inbox_from[0]) {
+        WCHAR wf[200]; utf8_to_wide(g_inbox_from, wf, 200);
+        _snwprintf(g_nid.szTip, 128, TW(L"GoodFon — сообщений: %d (%s)", L"GoodFon — messages: %d (%s)"),
+                   g_inbox_count, wf);
+        g_nid.szTip[127] = 0;
+    } else if (g_inbox_count > 0)
         _snwprintf(g_nid.szTip, 128, TW(L"GoodFon — сообщений: %d", L"GoodFon — messages: %d"), g_inbox_count);
     else
         wcscpy(g_nid.szTip, TW(L"GoodFon — смена обоев", L"GoodFon — wallpaper changer"));
@@ -3555,7 +3630,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         else if (id == IDC_BTN_SIGNOUT && code == BN_CLICKED) {
             account_logout();
             g_login_status = 0;
-            g_inbox_count = 0; tray_tip_update();
+            g_inbox_count = 0; g_inbox_from[0] = 0; g_inbox_user[0] = 0; tray_tip_update();
             run_async(IDM_UPDATE);     /* сменить обои — уйти с эротики визуально */
             settings_relaunch();       /* пересобрать окно: список тем без эротики, тема girls */
         }
@@ -4513,10 +4588,16 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             int cnt = (int)wp - 1;
             if (cnt > g_inbox_count) {
                 LOG_INFO(T("Новые сообщения: %d", "New messages: %d"), cnt);
-                WCHAR t[96];
-                _snwprintf(t, 96, TW(L"Непрочитанных сообщений: %d", L"Unread messages: %d"), cnt);
+                WCHAR t[260];
+                if (g_inbox_from[0]) {
+                    WCHAR wf[200]; utf8_to_wide(g_inbox_from, wf, 200);
+                    _snwprintf(t, 260, TW(L"От: %s\nНепрочитанных: %d", L"From: %s\nUnread: %d"), wf, cnt);
+                } else
+                    _snwprintf(t, 260, TW(L"Непрочитанных сообщений: %d", L"Unread messages: %d"), cnt);
+                t[259] = 0;
                 notify_core(TW(L"Новое сообщение", L"New message"), t, g_ic_mail);
             }
+            if (cnt == 0) { g_inbox_from[0] = 0; g_inbox_user[0] = 0; }   /* прочитано на сайте */
             if (cnt != g_inbox_count) { g_inbox_count = cnt; tray_tip_update(); }
         }
         return 0;
@@ -4598,10 +4679,14 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         }
         else if (id == IDM_INBOX) {
             char base[64], url[128]; base_url(base, sizeof(base));
-            snprintf(url, sizeof(url), "%s/inbox/", base);
+            if (g_inbox_user[0])   /* один отправитель — сразу в его диалог */
+                snprintf(url, sizeof(url), "%s/inbox/?user=%s", base, g_inbox_user);
+            else
+                snprintf(url, sizeof(url), "%s/inbox/", base);
             WCHAR wurl[128]; utf8_to_wide(url, wurl, 128);
             ShellExecuteW(NULL, L"open", wurl, NULL, NULL, SW_SHOWNORMAL);
-            g_inbox_count = 0; tray_tip_update();               /* сайт пометит прочитанными */
+            g_inbox_count = 0; g_inbox_from[0] = 0; g_inbox_user[0] = 0;
+            tray_tip_update();                                   /* сайт пометит прочитанными */
         }
         else if (id == IDM_SETTINGS) open_settings();
         else if (id == IDM_EXIT) DestroyWindow(h);
