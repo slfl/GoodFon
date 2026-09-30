@@ -42,7 +42,7 @@ __declspec(dllimport) UINT __stdcall timeEndPeriod(UINT);
 /* ================= Константы ================= */
 
 #define APP_NAME        L"GoodFon"
-#define APP_VERSION     "2.7"
+#define APP_VERSION     "3.0"
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_ID        1
 #define UPD_TIMER_ID    2
@@ -199,43 +199,44 @@ static const ResDef g_reses[] = {
 
 /* Встроенный список тем: slug для URL + имя для меню (ru/en).
  * anime/auto на goodfon живут на поддоменах — здесь не включены.       */
-typedef struct { const char *slug; const wchar_t *name_ru; const wchar_t *name_en; } ThemeDef;
+typedef struct { const char *slug; const wchar_t *name_ru; const wchar_t *name_en; int cat; } ThemeDef;
+/* cat — id раздела в фильтре сайта: POST /mix/ catalog=<id> */
 static const ThemeDef g_themes_all[] = {
-    { "erotic",      L"Эротика",      L"Erotic"       },
-    { "girls",       L"Девушки",      L"Girls"        },
-    { "nature",      L"Природа",      L"Nature"       },
-    { "landscapes",  L"Пейзажи",      L"Landscapes"   },
-    { "hi-tech",     L"Hi-Tech",      L"Hi-Tech"      },
-    { "abstraction", L"Абстракции",   L"Abstraction"  },
-    { "aviation",    L"Авиация",      L"Aviation"     },
-    { "city",        L"Город",        L"City"         },
-    { "food",        L"Еда",          L"Food"         },
-    { "painting",    L"Живопись",     L"Painting"     },
-    { "animals",     L"Животные",     L"Animals"      },
-    { "games",       L"Игры",         L"Games"        },
-    { "ai-art",      L"ИИ арт",       L"AI Art"       },
-    { "interior",    L"Интерьер",     L"Interior"     },
-    { "space",       L"Космос",       L"Space"        },
-    { "cats",        L"Кошки",        L"Cats"         },
-    { "Love",        L"Любовь",       L"Love"         },
-    { "macro",       L"Макро",        L"Macro"        },
-    { "minimalism",  L"Минимализм",   L"Minimalism"   },
-    { "men",         L"Мужчины",      L"Men"          },
-    { "music",       L"Музыка",       L"Music"        },
-    { "mood",        L"Настроения",   L"Mood"         },
-    { "new-year",    L"Новый год",    L"New Year"     },
-    { "weapon",      L"Оружие",       L"Weapon"       },
-    { "holidays",    L"Праздники",    L"Holidays"     },
-    { "miscellanea", L"Разное",       L"Miscellanea"  },
-    { "rendering",   L"Рендеринг",    L"Rendering"    },
-    { "situations",  L"Ситуации",     L"Situations"   },
-    { "dog",         L"Собаки",       L"Dogs"         },
-    { "sports",      L"Спорт",        L"Sports"       },
-    { "style",       L"Стиль",        L"Style"        },
-    { "textures",    L"Текстуры",     L"Textures"     },
-    { "fantasy",     L"Фантастика",   L"Fantasy"      },
-    { "films",       L"Фильмы",       L"Films"        },
-    { "flowers",     L"Цветы",        L"Flowers"      },
+    { "erotic", L"Эротика", L"Erotic", 12 },
+    { "girls", L"Девушки", L"Girls", 3 },
+    { "nature", L"Природа", L"Nature", 14 },
+    { "landscapes", L"Пейзажи", L"Landscapes", 13 },
+    { "hi-tech", L"Hi-Tech", L"Hi-Tech", 30 },
+    { "abstraction", L"Абстракции", L"Abstraction", 1 },
+    { "aviation", L"Авиация", L"Aviation", 29 },
+    { "city", L"Город", L"City", 2 },
+    { "food", L"Еда", L"Food", 34 },
+    { "painting", L"Живопись", L"Painting", 35 },
+    { "animals", L"Животные", L"Animals", 5 },
+    { "games", L"Игры", L"Games", 24 },
+    { "ai-art", L"ИИ арт", L"AI Art", 108 },
+    { "interior", L"Интерьер", L"Interior", 33 },
+    { "space", L"Космос", L"Space", 6 },
+    { "cats", L"Кошки", L"Cats", 7 },
+    { "Love", L"Любовь", L"Love", 109 },
+    { "macro", L"Макро", L"Macro", 8 },
+    { "minimalism", L"Минимализм", L"Minimalism", 27 },
+    { "men", L"Мужчины", L"Men", 10 },
+    { "music", L"Музыка", L"Music", 31 },
+    { "mood", L"Настроения", L"Mood", 11 },
+    { "new-year", L"Новый год", L"New Year", 28 },
+    { "weapon", L"Оружие", L"Weapon", 32 },
+    { "holidays", L"Праздники", L"Holidays", 23 },
+    { "miscellanea", L"Разное", L"Miscellanea", 4 },
+    { "rendering", L"Рендеринг", L"Rendering", 15 },
+    { "situations", L"Ситуации", L"Situations", 16 },
+    { "dog", L"Собаки", L"Dogs", 17 },
+    { "sports", L"Спорт", L"Sports", 18 },
+    { "style", L"Стиль", L"Style", 19 },
+    { "textures", L"Текстуры", L"Textures", 26 },
+    { "fantasy", L"Фантастика", L"Fantasy", 20 },
+    { "films", L"Фильмы", L"Films", 21 },
+    { "flowers", L"Цветы", L"Flowers", 22 },
 };
 #define THEME_COUNT (int)(sizeof(g_themes_all)/sizeof(g_themes_all[0]))
 
@@ -302,7 +303,6 @@ static int    g_cur_rating = 0;           /* рейтинг картинки */
 static int    g_cur_has_rating = 0;       /* 1 = рейтинг известен */
 static int    g_cur_vote = 0;             /* мой голос: 0 нет, +1, -1 (этап 2) */
 static char   g_cur_vote_path[96] = "";   /* /api/fon/vote/ID/ (этап 2) */
-static char   g_page_dbg[200] = "";        /* фрагмент разметки рейтинга (для диагностики) */
 /* «Колода» избранного: перемешанный список, каждая картинка раз за круг. */
 static WCHAR (*g_fav_bag)[MAX_PATH] = NULL;
 static int    g_fav_bag_n = 0, g_fav_bag_cur = 0;
@@ -803,11 +803,13 @@ typedef struct {
 /* Универсальный запрос. method: "GET"/"POST"; url: полный https://...
  * body: тело POST или NULL; extra: доп. заголовки CRLF-строкой или NULL.
  * recv_timeout_ms: таймаут получения ответа. limit: макс. размер тела.  */
+static volatile LONG g_http_n;   /* определён в конвейере загрузки */
 static int http_request(const char *method, const char *url,
                         const char *body, const char *extra_headers,
                         int recv_timeout_ms, size_t limit, HttpResp *out)
 {
     memset(out, 0, sizeof(*out));
+    InterlockedIncrement(&g_http_n);
 
     WCHAR wurl[1024];
     utf8_to_wide(url, wurl, 1024);
@@ -912,8 +914,9 @@ static int http_request(const char *method, const char *url,
 
         /* авто-повтор шлюзовых ошибок */
         if ((status == 502 || status == 503 || status == 504) && attempt < 2) {
-            LOG_WARN(T("HTTP %d %s -> статус %lu, повтор через 2с", "HTTP %d %s -> status %lu, retry in 2s"),
-                     attempt + 1, url, (unsigned long)status);
+            LOG_WARN(T("HTTP %s %s -> статус %lu, повтор через 2с (попытка %d)",
+                       "HTTP %s %s -> status %lu, retry in 2s (attempt %d)"),
+                     method, url, (unsigned long)status, attempt + 1);
             free(out->body); out->body = NULL; out->len = 0;
             Sleep(2000);
             continue;
@@ -1513,47 +1516,6 @@ static int ensure_session(void)
     return 0;
 }
 
-static int get_max_pages(void)
-{
-    char url[512], base[64];
-    base_url(base, sizeof(base));
-    snprintf(url, sizeof(url), "%s/%s/", base, g_cfg.theme);
-    HttpResp r;
-    if (!http_request("GET", url, NULL, NULL, 15000, BODY_LIMIT, &r) ||
-        r.status != 200 || !r.body) { free(r.body); return 0; }
-    int maxp = 1;
-    const char *p = r.body;
-    while ((p = strstr(p, "index-")) != NULL) {
-        p += 6;
-        int v = atoi(p);
-        if (v > maxp) maxp = v;
-    }
-    free(r.body);
-    return maxp > 1 ? maxp : 0;
-}
-
-/* Собрать до max ссылок на страницы картинок из HTML раздела. */
-static int collect_links(const char *html, char links[][512], int max)
-{
-    int n = 0;
-    const char *p = html;
-    while (n < max && (p = strstr(p, "href=")) != NULL) {
-        char href[512];
-        if (extract_attr(p, "href=", href, sizeof(href))) {
-            if (strstr(href, "/wallpaper-") &&
-                !strstr(href, "wallpaper-download") &&
-                strstr(href, ".html")) {
-                int dup = 0;
-                for (int i = 0; i < n; i++)
-                    if (!strcmp(links[i], href)) { dup = 1; break; }
-                if (!dup) strncpy(links[n++], href, 511);
-            }
-        }
-        p += 5;
-    }
-    return n;
-}
-
 static void make_absolute(const char *href, char *out, size_t sz)
 {
     if (!strncmp(href, "http", 4)) { strncpy(out, href, sz - 1); out[sz-1] = 0; return; }
@@ -1578,20 +1540,6 @@ static void parse_page_info(const char *html, int *rating, int *has_rating, int 
             if (q < lim && (*q == '+' || *q == '-' || (*q >= '0' && *q <= '9'))) {
                 *rating = atoi(q); *has_rating = 1;
             }
-        }
-    }
-    /* диагностика: фрагмент вокруг блока рейтинга (для настройки парсера) */
-    {
-        const char *mb = strstr(html, "mark_block");
-        if (!mb) mb = strstr(html, "class=\"count");
-        if (!mb) mb = strstr(html, "/api/fon/vote/");
-        g_page_dbg[0] = 0;
-        if (mb) {
-            int i = 0; for (const char *p = mb; *p && i < (int)sizeof(g_page_dbg) - 1; p++) {
-                char ch = *p; if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
-                g_page_dbg[i++] = ch;
-            }
-            g_page_dbg[i] = 0;
         }
     }
     /* скачивания: последнее число в user_block__user, склеивая разряды
@@ -1638,137 +1586,6 @@ static void parse_page_info(const char *html, int *rating, int *has_rating, int 
  * границы нет (берётся всё, что >= выбранного).                          */
 /* Найти прямой URL картинки под целевое разрешение (tw x th; 0,0 = оригинал).
  * Возврат: 1 = найден (out), 0 = пропустить картинку, -1 = квота. */
-static int find_image_url_wh(const char *image_page_url, int tw, int th, char *out, size_t outsz)
-{
-    HttpResp r;
-    if (!http_request("GET", image_page_url, NULL, NULL, 15000, BODY_LIMIT, &r) ||
-        r.status != 200 || !r.body) { free(r.body); return 0; }
-
-    int _pr = 0, _phr = 0, _pdl = -1; char _pvp[96] = "";
-    parse_page_info(r.body, &_pr, &_phr, &_pdl, _pvp, sizeof(_pvp));
-
-    char dl_href[512] = "";
-    if (tw <= 0 || th <= 0) {
-        /* режим "Оригинал": берём ссылку с самым большим WxH */
-        long best = -1;
-        const char *p = r.body;
-        while ((p = strstr(p, "href=")) != NULL) {
-            char href[512];
-            if (extract_attr(p, "href=", href, sizeof(href))) {
-                const char *d = strstr(href, "wallpaper-download-");
-                if (d) {
-                    int w = 0, hh = 0;
-                    if (sscanf(d + 19, "%dx%d", &w, &hh) == 2) {
-                        long area = (long)w * hh;
-                        if (area > best) {
-                            best = area;
-                            strncpy(dl_href, href, sizeof(dl_href) - 1);
-                            dl_href[sizeof(dl_href) - 1] = 0;
-                        }
-                    }
-                }
-            }
-            p += 5;
-        }
-    } else {
-        /* берём разрешение, НАИБОЛЕЕ БЛИЗКОЕ к целевому — наименьшее из тех,
-         * что >= цели; если таких нет — наибольшее доступное.
-         * Ультраширокие/панорамные отсекаем по соотношению сторон. */
-        double ta = th ? (double)tw / th : 1.777;
-        long best_over = -1; int cwo = 0, cho = 0; char href_over[512] = "";
-        long best_any  = -1; int cwa = 0, cha = 0; char href_any[512]  = "";
-        const char *p = r.body;
-        while ((p = strstr(p, "href=")) != NULL) {
-            char href[512];
-            if (extract_attr(p, "href=", href, sizeof(href))) {
-                const char *d = strstr(href, "wallpaper-download-");
-                if (d) {
-                    int w = 0, hh = 0;
-                    if (sscanf(d + 19, "%dx%d", &w, &hh) == 2) {
-                        double ar = hh ? (double)w / hh : ta;
-                        int aspect_ok = (ar >= ta / 1.5 && ar <= ta * 1.5);
-                        if (aspect_ok) {
-                            long area = (long)w * hh;
-                            if (area > best_any) {
-                                best_any = area; cwa = w; cha = hh;
-                                strncpy(href_any, href, sizeof(href_any) - 1);
-                                href_any[sizeof(href_any) - 1] = 0;
-                            }
-                            if (w >= tw && hh >= th && (best_over < 0 || area < best_over)) {
-                                best_over = area; cwo = w; cho = hh;
-                                strncpy(href_over, href, sizeof(href_over) - 1);
-                                href_over[sizeof(href_over) - 1] = 0;
-                            }
-                        }
-                    }
-                }
-            }
-            p += 5;
-        }
-        int cw, ch;
-        if (best_over >= 0) { strcpy(dl_href, href_over); cw = cwo; ch = cho; }
-        else if (best_any >= 0) { strcpy(dl_href, href_any); cw = cwa; ch = cha; }
-        else { cw = ch = 0; }
-        if (dl_href[0] && (cw != tw || ch != th))
-            LOG_INFO(T("Цель %dx%d: выбрано %dx%d", "Target %dx%d: chose %dx%d"), tw, th, cw, ch);
-    }
-    free(r.body);
-    if (!dl_href[0]) {
-        LOG_INFO(T("Нет подходящего разрешения для картинки, пропускаем.", "No suitable resolution for the image, skipping."));
-        return 0;
-    }
-
-    char dl_url[600];
-    make_absolute(dl_href, dl_url, sizeof(dl_url));
-    HttpResp d;
-    if (!http_request("GET", dl_url, NULL, NULL, 15000, BODY_LIMIT, &d) ||
-        d.status != 200 || !d.body) { free(d.body); return 0; }
-
-    if (strstr(d.body, QUOTA_MARKER_RU) || strstr(d.body, "download_limit")) {
-        free(d.body);
-        LOG_WARN(T("Превышен суточный лимит скачиваний на сайте.", "Daily download limit on the site exceeded."));
-        return -1;
-    }
-
-    int found = 0;
-    const char *a = strstr(d.body, "js-download_img");
-    if (a) {
-        /* откатиться к началу тега <a */
-        const char *tag = a;
-        while (tag > d.body && *tag != '<') tag--;
-        char href[512];
-        if (extract_attr(tag, "href=", href, sizeof(href)) &&
-            strstr(href, "img.goodfon")) {
-            strncpy(out, href, outsz - 1); out[outsz-1] = 0; found = 1;
-        }
-    }
-    if (!found) {
-        const char *im = d.body;
-        while ((im = strstr(im, "<img")) != NULL) {
-            char src[512];
-            if (extract_attr(im, "src=", src, sizeof(src)) &&
-                strstr(src, "img.goodfon")) {
-                strncpy(out, src, outsz - 1); out[outsz-1] = 0; found = 1; break;
-            }
-            im += 4;
-        }
-    }
-    free(d.body);
-    if (!found)
-        LOG_WARN(T("Ссылка на картинку не найдена на странице загрузки.", "Image link not found on the download page."));
-    if (found) {   /* зафиксировать инфо страницы для карточки */
-        g_cur_rating = _pr; g_cur_has_rating = _phr; g_cur_downloads = _pdl; g_cur_vote = 0;
-        strncpy(g_cur_vote_path, _pvp, sizeof(g_cur_vote_path) - 1);
-        g_cur_vote_path[sizeof(g_cur_vote_path) - 1] = 0;
-        LOG_INFO(T("Инфо страницы: рейтинг=%d (есть:%d), скачиваний=%d, vote=%hs",
-                   "Page info: rating=%d (has:%d), downloads=%d, vote=%hs"),
-                 _pr, _phr, _pdl, _pvp[0] ? _pvp : "-");
-        if (!_phr && g_page_dbg[0])
-            LOG_INFO(T("Разметка рейтинга: %hs", "Rating markup: %hs"), g_page_dbg);
-    }
-    return found ? 1 : 0;
-}
-
 /* Скачивание с резервом домена img.com<->img.ru. Возврат malloc-буфера. */
 static char *download_image(const char *url, size_t *outLen)
 {
@@ -1831,8 +1648,30 @@ static int save_image(const char *url, const char *data, size_t len,
 
 /* ============ Избранное ============ */
 
+/* Реальная ссылка на страницу — в альтернативном потоке файла «имя.jpg:gfpage».
+   Не видна в проводнике, копируется вместе с файлом (CopyFile). На FAT — просто нет. */
+static void page_tag_write(const WCHAR *file, const char *url)
+{
+    WCHAR ads[MAX_PATH + 16]; _snwprintf(ads, MAX_PATH + 16, L"%s:gfpage", file); ads[MAX_PATH + 15] = 0;
+    HANDLE h = CreateFileW(ads, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD wr; WriteFile(h, url, (DWORD)strlen(url), &wr, NULL);
+    CloseHandle(h);
+}
+static int page_tag_read(const WCHAR *file, char *out, size_t sz)
+{
+    WCHAR ads[MAX_PATH + 16]; _snwprintf(ads, MAX_PATH + 16, L"%s:gfpage", file); ads[MAX_PATH + 15] = 0;
+    HANDLE h = CreateFileW(ads, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    DWORD rd = 0; ReadFile(h, out, (DWORD)(sz - 1), &rd, NULL);
+    CloseHandle(h);
+    out[rd] = 0;
+    return rd > 0 && !strncmp(out, "http", 4) && strstr(out, "/wallpaper-");
+}
+
 static void page_url_for_file(const WCHAR *file, char *out, size_t sz)
 {
+    if (page_tag_read(file, out, sz)) return;       /* точная ссылка, записанная при скачивании */
     WCHAR name[256];
     wcsncpy(name, PathFindFileNameW(file), 255); name[255] = 0;
     PathRemoveExtensionW(name);
@@ -1869,6 +1708,8 @@ static int favorite_api(const char *page_url, int add)
 
 /* ============ Сценарии ============ */
 
+static void fetch_page_info(void);   /* fwd: рейтинг/скачивания со страницы обоев */
+
 static void fallback_local(int favorite_only)
 {
     g_cur_has_rating = 0; g_cur_downloads = -1; g_cur_vote = 0; g_cur_vote_path[0] = 0;  /* локально — инфо сайта нет */
@@ -1892,6 +1733,12 @@ static void fallback_local(int favorite_only)
     notify_core(favorite_only ? TW(L"Обои обновлены — из избранного", L"Wallpaper updated — from favorites")
                           : TW(L"Обои обновлены — локально", L"Wallpaper updated — locally"), info,
                 favorite_only ? g_ic_fav : NULL);
+    /* Картинка локальная, но сайт доступен (лимит, пустая выдача) — рейтинг и
+       скачивания берём со страницы обоев. Просмотр страницы в лимит не входит. */
+    if (g_active_domain >= 0) {
+        fetch_page_info();
+        if (g_hwnd) PostMessageW(g_hwnd, WM_APP_VOTED, 0, 0);   /* обновить карточку, если меню открыто */
+    }
 }
 
 /* Сигнатура набора избранного (не зависит от порядка сканирования). */
@@ -1957,8 +1804,8 @@ static void fetch_page_info(void)
         g_cur_rating = pr; g_cur_has_rating = phr; g_cur_downloads = pdl; g_cur_vote = 0;
         strncpy(g_cur_vote_path, pvp, sizeof(g_cur_vote_path) - 1);
         g_cur_vote_path[sizeof(g_cur_vote_path) - 1] = 0;
-        LOG_INFO(T("Инфо избранного: рейтинг=%d (есть:%d), скачиваний=%d, vote=%hs",
-                   "Favorite info: rating=%d (has:%d), downloads=%d, vote=%hs"),
+        LOG_INFO(T("Инфо страницы: рейтинг=%d (есть:%d), скачиваний=%d, vote=%hs",
+                   "Page info: rating=%d (has:%d), downloads=%d, vote=%hs"),
                  pr, phr, pdl, pvp[0] ? pvp : "-");
     }
     free(r.body);
@@ -1987,93 +1834,336 @@ static int set_wallpaper_from_favorite(void)
 
 /* Скачать одну случайную картинку под разрешение (tw x th; 0,0 = оригинал),
  * сохранить путь в out. Возврат: 1 = ок, 0 = не нашли, -1 = квота. */
-static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz, char *page_out, int page_sz)
+/* ===================== Конвейер загрузки (3.0) =====================
+ * 1) MIX и темы: POST /mix/ catalog=<id>&resolution=WxH — JSON, фильтр сервера;
+ *    эротика (в /mix/ её нет) и песочница (JSON не отдаёт): случайная страница
+ *    index-N.html — у каждой карточки есть размер. /api/fon/12/ не годится: он
+ *    отдаёт разделы из настройки профиля «Показ разделов на главной».
+ * 2) страница скачивания wallpaper-download-WxH-<slug>.html (~5 КБ): проверка
+ *    суточного лимита + точная ссылка на файл (с верным расширением).
+ * 3) сама картинка.
+ * Рейтинг/скачивания — отдельным запросом страницы обоев ПОСЛЕ установки обоев.
+ * MIX не присылает размеры: для 8K/«Оригинал» размер берём со страницы обоев
+ * (она же сразу даёт рейтинг). */
+
+#define JITEMS_MAX 64
+static volatile LONG g_http_n;        /* счётчик HTTP-запросов (для лога -debug) */
+
+/* Разрешения, которые понимает серверный фильтр (из наших тиров — все, кроме 8K) */
+static int res_server_ok(int w, int h)
 {
-    const int IMG_BUDGET = 40;
-    int max_pages = 0, images_tried = 0, net_fails = 0;
-    const int NET_FAIL_LIMIT = g_cfg.max_attempts + 4;
+    static const int ok[][2] = { {1280,720}, {1920,1080}, {2560,1440}, {3840,2160} };
+    for (int i = 0; i < (int)(sizeof(ok)/sizeof(ok[0])); i++)
+        if (ok[i][0] == w && ok[i][1] == h) return 1;
+    return 0;
+}
+
+/* Короткий фрагмент ответа в лог (для отладки формата) */
+static void log_snippet(const char *what, const char *body)
+{
+    char sn[220]; int i = 0;
+    for (const char *c = body ? body : ""; *c && i < (int)sizeof(sn) - 1; c++)
+        sn[i++] = (*c == '\n' || *c == '\r' || *c == '\t') ? ' ' : *c;
+    sn[i] = 0;
+    LOG_INFO("%s: %s", what, sn[0] ? sn : "(пусто)");
+}
+
+/* Список обоев JSON-ом. Возврат: >0 — число ссылок, 0 — пусто/не тот формат, -1 — сеть. */
+typedef struct { char url[512]; int w, h; } JItem;   /* w/h = 0, если сайт не прислал */
+
+/* Значение числового ключа "key" внутри одного JSON-объекта [p, end) */
+static int json_int_in(const char *p, const char *end, const char *key)
+{
+    const char *k = strstr(p, key);
+    if (!k || k >= end) return 0;
+    k += strlen(key);
+    while (*k == ' ' || *k == ':') k++;
+    return atoi(k);
+}
+
+/* Список обоев JSON-ом: POST /mix/ catalog=<id>&resolution=WxH (MIX — catalog пустой).
+   Сервер фильтрует и по разделу, и по разрешению. Возврат: >0 — ссылок, 0 — пусто, -1 — сеть. */
+static int json_list(JItem *items, int max, int tw, int th)
+{
     char base[64]; base_url(base, sizeof(base));
+    const char *host = g_hosts[g_active_domain];
     int is_mix = !_stricmp(g_cfg.theme, MIX_SLUG);
 
-    while (images_tried < IMG_BUDGET) {
-        char page_url[512];
-        if (is_mix) {
-            /* /mix/ — без пагинации; каждый запрос отдаёт новую случайную выборку */
-            snprintf(page_url, sizeof(page_url), "%s/mix/", base);
-        } else {
-            if (max_pages == 0) {
-                max_pages = get_max_pages();
-                if (max_pages == 0) {
-                    if (++net_fails >= NET_FAIL_LIMIT) break;
-                    LOG_WARN(T("Ошибка пагинации (сбой %d)", "Pagination error (failure %d)"), net_fails);
-                    Sleep(1000);
-                    continue;
-                }
-                LOG_INFO(T("Максимальное количество страниц: %d", "Maximum number of pages: %d"), max_pages);
-            }
-            int page = rng_below(max_pages) + 1;
-            if (page == 1) snprintf(page_url, sizeof(page_url), "%s/%s/", base, g_cfg.theme);
-            else snprintf(page_url, sizeof(page_url), "%s/%s/index-%d.html", base, g_cfg.theme, page);
-        }
+    char url[160], body[96], sec[80] = "", res[24] = "", hdr[600];
+    if (!is_mix) snprintf(sec, sizeof(sec), "/%s/", g_cfg.theme);   /* ожидаемый раздел в ссылках */
+    if (tw > 0) snprintf(res, sizeof(res), "%dx%d", tw, th);
+    int cid = 0;
+    for (int i = 0; i < THEME_COUNT; i++)
+        if (!_stricmp(g_themes_all[i].slug, g_cfg.theme)) { cid = g_themes_all[i].cat; break; }
+    snprintf(url, sizeof(url), "%s/mix/", base);
+    if (cid) snprintf(body, sizeof(body), "catalog=%d&resolution=%s", cid, res);
+    else     snprintf(body, sizeof(body), "catalog=&resolution=%s", res);
+    snprintf(hdr, sizeof(hdr),
+        "Accept: application/json\r\n"
+        "Content-Type: application/x-www-form-urlencoded; charset=UTF-8\r\n"
+        "X-Requested-With: XMLHttpRequest\r\nOrigin: %s\r\nReferer: %s\r\n", base, url);
 
-        HttpResp r;
-        if (!http_request("GET", page_url, NULL, NULL, 15000, BODY_LIMIT, &r) ||
-            r.status != 200 || !r.body) {
-            int st = r.status; free(r.body);
-            if (++net_fails >= NET_FAIL_LIMIT) {
-                LOG_WARN(T("Слишком много сетевых ошибок (последний статус %d)", "Too many network errors (last status %d)"), st);
-                break;
-            }
-            LOG_WARN(T("Страница раздела не загрузилась (статус %d)", "Section page failed to load (status %d)"), st);
+    HttpResp r;
+    if (!http_request("POST", url, body, hdr, 15000, BODY_LIMIT, &r) || r.status != 200 || !r.body) {
+        LOG_WARN(T("JSON-список: POST %s [%s] -> статус %d", "JSON list: POST %s [%s] -> status %d"), url, body, r.status);
+        if (r.body) log_snippet(T("Ответ", "Response"), r.body);
+        free(r.body); return -1;
+    }
+    if (!strstr(r.body, "\"success\"")) {
+        LOG_WARN(T("JSON-список: неожиданный ответ от %s", "JSON list: unexpected reply from %s"), url);
+        log_snippet(T("Ответ", "Response"), r.body);
+        free(r.body); return 0;
+    }
+
+    /* значения ключа "url" (catalog_url не совпадает — перед url нет кавычки) */
+    int n = 0, total = 0, foreign = 0;
+    const char *p = r.body;
+    while (n < max && (p = strstr(p, "\"url\"")) != NULL) {
+        const char *obj = p;
+        p += 5;
+        while (*p == ' ' || *p == ':') p++;
+        if (*p != '"') continue;
+        p++;
+        char u[512]; int i = 0;
+        while (*p && *p != '"' && i < 511) {
+            if (*p == '\\' && p[1]) p++;            /* \/ -> / */
+            u[i++] = *p++;
+        }
+        u[i] = 0;
+        total++;
+        if (!(strstr(u, "/wallpaper-") && strstr(u, ".html") && strstr(u, host))) continue; /* anime./auto. */
+        if (sec[0] && !strstr(u, sec)) { foreign++; continue; }
+        const char *end = strchr(obj, '}'); if (!end) end = obj + strlen(obj);
+        strcpy(items[n].url, u);
+        items[n].w = json_int_in(obj, end, "\"width\"");
+        items[n].h = json_int_in(obj, end, "\"height\"");
+        n++;
+    }
+    LOG_INFO(T("JSON-список %s [%s]: ссылок %d, подходит %d, чужой раздел %d (%d байт)",
+               "JSON list %s [%s]: links %d, usable %d, foreign section %d (%d bytes)"),
+             url, body, total, n, foreign, (int)r.len);
+    if (n == 0) log_snippet(T("Ответ", "Response"), r.body);
+    free(r.body);
+    return n;
+}
+
+/* Эротика и песочница: JSON-списка у сайта для них нет (листание — обычные GET
+   index-N.html), поэтому берём случайную страницу раздела. У каждой карточки в
+   списке указан размер (<small>WxH</small>), так что данных столько же, сколько
+   в JSON. Число страниц узнаём один раз (с первой страницы) и кэшируем. */
+static char g_pg_slug[32] = "";
+static int  g_pg_dom = -1, g_pg_max = 0;
+
+static int html_list(JItem *items, int max)
+{
+    char base[64]; base_url(base, sizeof(base));
+    const char *host = g_hosts[g_active_domain];
+    int is_sb = !_stricmp(g_cfg.theme, SANDBOX_SLUG);
+    char sec[80] = "";
+    if (!is_sb) snprintf(sec, sizeof(sec), "/%s/", g_cfg.theme);   /* песочница — ссылки в разные разделы */
+
+    int known = g_pg_max > 0 && g_pg_dom == g_active_domain && !_stricmp(g_pg_slug, g_cfg.theme);
+    int page = known ? rng_below(g_pg_max) + 1 : 1;
+    char url[200];
+    if (page <= 1) snprintf(url, sizeof(url), "%s/%s/", base, g_cfg.theme);
+    else           snprintf(url, sizeof(url), "%s/%s/index-%d.html", base, g_cfg.theme, page);
+
+    HttpResp r;
+    if (!http_request("GET", url, NULL, NULL, 15000, BODY_LIMIT, &r) || r.status != 200 || !r.body) {
+        LOG_WARN(T("Список раздела: GET %s -> статус %d", "Section list: GET %s -> status %d"), url, r.status);
+        free(r.body); return -1;
+    }
+    if (!known) {                                   /* первая страница: запомнить число страниц */
+        int mx = 1;
+        for (const char *q = r.body; (q = strstr(q, "index-")) != NULL; q += 6) {
+            int v = atoi(q + 6); if (v > mx) mx = v;
+        }
+        g_pg_max = mx; g_pg_dom = g_active_domain;
+        strncpy(g_pg_slug, g_cfg.theme, sizeof(g_pg_slug) - 1); g_pg_slug[sizeof(g_pg_slug) - 1] = 0;
+        LOG_INFO(T("Раздел %s: страниц %d", "Section %s: %d pages"), g_cfg.theme, mx);
+    }
+
+    /* карточка: <a href=…/wallpaper-….html>…</a> … wallpapers__item__size … <small>WxH</small> */
+    int n = 0, total = 0, foreign = 0;
+    char last[512] = "";
+    const char *p = r.body;
+    while (n < max) {
+        const char *h = strstr(p, "href=");
+        const char *z = strstr(p, "wallpapers__item__size");
+        if (!z) break;
+        if (h && h < z) {
+            char href[512];
+            if (extract_attr(h, "href=", href, sizeof(href)) && strstr(href, "/wallpaper-") &&
+                strstr(href, ".html") && !strstr(href, "wallpaper-download"))
+                strcpy(last, href);
+            p = h + 5;
             continue;
         }
-        static char links[64][512];
-        int n = collect_links(r.body, links, 64);
-        free(r.body);
-        if (is_mix) {
-            /* оставить только www-раздел текущего домена — поддомены (anime./auto.)
-               могут ломать относительную ссылку на скачивание, пропускаем их */
-            int m = 0;
-            for (int i = 0; i < n; i++)
-                if (strstr(links[i], g_hosts[g_active_domain])) {
-                    if (m != i) memcpy(links[m], links[i], 512);
-                    m++;
-                }
-            n = m;
+        p = z + 22;
+        const char *sm = strstr(p, "<small>");
+        int w = 0, hh = 0;
+        if (last[0] && sm && sscanf(sm + 7, "%dx%d", &w, &hh) == 2) {
+            char u[512];
+            if (!strncmp(last, "http", 4)) strcpy(u, last);
+            else snprintf(u, sizeof(u), "%s%s", base, last);
+            total++;
+            int dup = 0;
+            for (int i = 0; i < n; i++) if (!strcmp(items[i].url, u)) { dup = 1; break; }
+            if (!dup && strstr(u, host)) {                           /* auto./anime. — мимо */
+                if (sec[0] && !strstr(u, sec)) foreign++;
+                else { strcpy(items[n].url, u); items[n].w = w; items[n].h = hh; n++; }
+            }
         }
-        if (n == 0) { LOG_WARN(T("На странице нет обоев, пробуем другую", "No wallpapers on the page, trying another")); continue; }
+        last[0] = 0;
+    }
+    LOG_INFO(T("Список раздела %s: карточек %d, подходит %d, чужой раздел %d (%d байт)",
+               "Section list %s: cards %d, usable %d, foreign section %d (%d bytes)"),
+             url, total, n, foreign, (int)r.len);
+    free(r.body);
+    return n;
+}
+/* Ссылка на страницу скачивания: …/wallpaper-<slug>.html -> …/wallpaper-download-WxH-<slug>.html */
+static int build_dl_url(const char *page, int w, int h, char *out, size_t sz)
+{
+    const char *p = strstr(page, "/wallpaper-");
+    if (!p) return 0;
+    p += 11;
+    snprintf(out, sz, "%.*sdownload-%dx%d-%s", (int)(p - page), page, w, h, p);
+    return 1;
+}
 
-        int per_page = n < 6 ? n : 6;
-        int start = rng_below(n);
-        for (int k = 0; k < per_page && images_tried < IMG_BUDGET; k++) {
-            char image_page[600];
-            make_absolute(links[(start + k) % n], image_page, sizeof(image_page));
-            images_tried++;
-            LOG_INFO(T("Проверка #%d: %s", "Check #%d: %s"), images_tried, image_page);
+/* Инфо страницы обоев, найденное по ходу (режимы 8K/«Оригинал») — фиксируется при успехе */
+static int  g_pi_ok = 0, g_pi_r = 0, g_pi_hr = 0, g_pi_dl = -1;
+static char g_pi_vp[96] = "";
 
-            char img_url[600];
-            int fr = find_image_url_wh(image_page, tw, th, img_url, sizeof(img_url));
-            if (fr == -1) return -1;         /* квота */
-            if (fr == 0) continue;
+/* 8K / «Оригинал»: со страницы обоев выбрать размер (оригинал — самый большой;
+   цель — наименьший >= цели, иначе самый большой) и заодно снять рейтинг. */
+static int page_pick_size(const char *page, int tw, int th, int *cw, int *ch)
+{
+    HttpResp r;
+    if (!http_request("GET", page, NULL, NULL, 15000, BODY_LIMIT, &r) || r.status != 200 || !r.body) {
+        free(r.body); return 0;
+    }
+    parse_page_info(r.body, &g_pi_r, &g_pi_hr, &g_pi_dl, g_pi_vp, sizeof(g_pi_vp));
+    g_pi_ok = 1;
+    long best = -1, over = -1; int bw = 0, bh = 0, ow = 0, oh = 0;
+    for (const char *p = r.body; (p = strstr(p, "wallpaper-download-")) != NULL; p += 19) {
+        int w = 0, h = 0;
+        if (sscanf(p + 19, "%dx%d", &w, &h) != 2 || w <= 0 || h <= 0) continue;
+        long a = (long)w * h;
+        if (a > best) { best = a; bw = w; bh = h; }
+        if (tw > 0 && w >= tw && h >= th && (over < 0 || a < over)) { over = a; ow = w; oh = h; }
+    }
+    free(r.body);
+    if (over >= 0) { *cw = ow; *ch = oh; }
+    else if (best >= 0) { *cw = bw; *ch = bh; }
+    else return 0;
+    return 1;
+}
+
+/* Страница скачивания: 1 — ссылка найдена, 0 — нет (пропустить), -1 — суточный лимит. */
+static int dl_page_link(const char *dl_url, char *out, size_t outsz)
+{
+    HttpResp d;
+    if (!http_request("GET", dl_url, NULL, NULL, 15000, BODY_LIMIT, &d) || d.status != 200 || !d.body) {
+        LOG_INFO(T("Страница загрузки картинки недоступна (статус %d)", "Image download page unavailable (status %d)"), d.status);
+        free(d.body); return 0;
+    }
+    if (strstr(d.body, QUOTA_MARKER_RU) || strstr(d.body, "download_limit")) {
+        free(d.body);
+        LOG_WARN(T("Превышен суточный лимит скачиваний на сайте.", "Daily download limit on the site exceeded."));
+        return -1;
+    }
+    int found = 0;
+    const char *a = strstr(d.body, "js-download_img");
+    if (a) {
+        const char *tag = a;
+        while (tag > d.body && *tag != '<') tag--;
+        char href[512];
+        if (extract_attr(tag, "href=", href, sizeof(href)) && strstr(href, "img.goodfon")) {
+            strncpy(out, href, outsz - 1); out[outsz - 1] = 0; found = 1;
+        }
+    }
+    for (const char *im = d.body; !found && (im = strstr(im, "<img")) != NULL; im += 4) {
+        char src[512];
+        if (extract_attr(im, "src=", src, sizeof(src)) && strstr(src, "img.goodfon")) {
+            strncpy(out, src, outsz - 1); out[outsz - 1] = 0; found = 1;
+        }
+    }
+    if (!found) LOG_WARN(T("Ссылка на картинку не найдена на странице загрузки.", "Image link not found on the download page."));
+    free(d.body);
+    return found;
+}
+
+/* Одна новая картинка с сайта. 1 — ок, 0 — не нашли, -1 — лимит.
+   *have_info = 1, если рейтинг уже снят попутно (режимы 8K/«Оригинал»). */
+static int fetch_one_wallpaper(int tw, int th, WCHAR *out, int outsz,
+                               char *page_out, int page_sz, int *have_info)
+{
+    static JItem items[JITEMS_MAX];
+    const int LISTS = 4, PER_LIST = 6;
+    int html_src = !_stricmp(g_cfg.theme, "erotic") || !_stricmp(g_cfg.theme, SANDBOX_SLUG);
+    int srv = !html_src && tw > 0 && res_server_ok(tw, th);  /* /mix/: разрешение фильтрует сервер */
+    int cand = 0, net_fails = 0;
+    *have_info = 0;
+
+    for (int l = 0; l < LISTS; l++) {
+        int n = html_src ? html_list(items, JITEMS_MAX)
+                         : json_list(items, JITEMS_MAX, srv ? tw : 0, srv ? th : 0);
+        if (n < 0) { if (++net_fails > g_cfg.max_attempts) break; Sleep(1000); l--; continue; }
+        if (n == 0) continue;
+
+        int start = rng_below(n), per = n < PER_LIST ? n : PER_LIST;
+        for (int k = 0; k < per; k++) {
+            JItem *it = &items[(start + k) % n];
+            int cw = tw, ch = th;
+            g_pi_ok = 0;
+
+            if (it->w > 0 && it->h > 0) {              /* размеры пришли в JSON */
+                if (tw <= 0) { cw = it->w; ch = it->h; }                /* «Оригинал» */
+                else if (it->w < tw || it->h < th) continue;             /* мельче цели / не та ориентация */
+            } else if (!srv) {                          /* MIX + 8K/«Оригинал»: размер со страницы */
+                if (!page_pick_size(it->url, tw, th, &cw, &ch)) continue;
+            }
+            cand++;
+            LOG_INFO(T("Проверка #%d: %s (%dx%d -> %dx%d)", "Check #%d: %s (%dx%d -> %dx%d)"),
+                     cand, it->url, it->w, it->h, cw, ch);
+
+            char dl[640], img[640];
+            if (!build_dl_url(it->url, cw, ch, dl, sizeof(dl))) continue;
+            int r = dl_page_link(dl, img, sizeof(img));
+            if (r < 0) return -1;
+            if (r == 0) continue;
 
             size_t len = 0;
-            char *data = download_image(img_url, &len);
+            char *data = download_image(img, &len);
             if (!data) { LOG_WARN(T("Не удалось скачать картинку, пробуем другую", "Failed to download image, trying another")); continue; }
             WCHAR saved[MAX_PATH];
-            int sok = save_image(img_url, data, len, saved, MAX_PATH);
+            int sok = save_image(img, data, len, saved, MAX_PATH);
             free(data);
             if (!sok) continue;
+
             wcsncpy(out, saved, outsz - 1); out[outsz - 1] = 0;
-            if (page_out && page_sz > 0) { strncpy(page_out, image_page, page_sz - 1); page_out[page_sz - 1] = 0; }
-            LOG_INFO(T("Найдено за %d проверок.", "Found after %d checks."), images_tried);
+            page_tag_write(saved, it->url);            /* запомнить настоящую страницу в самом файле */
+            if (page_out && page_sz > 0) { strncpy(page_out, it->url, page_sz - 1); page_out[page_sz - 1] = 0; }
+            if (g_pi_ok) {
+                g_cur_rating = g_pi_r; g_cur_has_rating = g_pi_hr; g_cur_downloads = g_pi_dl; g_cur_vote = 0;
+                strncpy(g_cur_vote_path, g_pi_vp, sizeof(g_cur_vote_path) - 1);
+                g_cur_vote_path[sizeof(g_cur_vote_path) - 1] = 0;
+                *have_info = 1;
+            }
+            LOG_INFO(T("Найдено за %d проверок.", "Found after %d checks."), cand);
             return 1;
         }
+        if (tw > 0 && !srv) LOG_INFO(T("В выдаче нет картинок >= %dx%d, пробуем другую выдачу", "No images >= %dx%d in this batch, trying another"), tw, th);
     }
     return 0;
 }
 
 static void do_update(void)
 {
+    DWORD t0 = GetTickCount();
+    LONG  q0 = g_http_n;
     int authed = ensure_session();   /* 1 = вошли, 0 = аноним/без входа */
 
     /* «Эротика» доступна только после авторизации */
@@ -2106,7 +2196,8 @@ static void do_update(void)
     if (_stricmp(g_cfg.resolution, "original") != 0) sscanf(g_cfg.resolution, "%dx%d", &tw, &th);
     WCHAR saved[MAX_PATH];
     char pageu[600] = "";
-    int fr = fetch_one_wallpaper(tw, th, saved, MAX_PATH, pageu, sizeof(pageu));
+    int have_info = 0;
+    int fr = fetch_one_wallpaper(tw, th, saved, MAX_PATH, pageu, sizeof(pageu), &have_info);
     if (fr == -1) {
         notify_core(TW(L"GoodFon: лимит исчерпан", L"GoodFon: limit reached"), TW(L"Загружаем из избранного.", L"Loading from favorites."), g_ic_fav);
         fallback_local(1); return;
@@ -2120,6 +2211,12 @@ static void do_update(void)
     if (pageu[0]) { strncpy(g_cur_page_url, pageu, sizeof(g_cur_page_url) - 1); g_cur_page_url[sizeof(g_cur_page_url)-1] = 0; } /* точная ссылка */
     WCHAR info[300]; name_no_ext(saved, info, 300);
     notify_core(TW(L"Обои обновлены — с сайта", L"Wallpaper updated — from site"), info, g_ic_site);
+    LOG_INFO(T("Обои готовы за %lu мс, HTTP-запросов: %ld", "Wallpaper ready in %lu ms, HTTP requests: %ld"),
+             (unsigned long)(GetTickCount() - t0), (long)(g_http_n - q0));
+    if (!have_info) {                /* рейтинг/скачивания — уже после установки обоев */
+        fetch_page_info();
+        if (g_hwnd) PostMessageW(g_hwnd, WM_APP_VOTED, 0, 0);   /* обновить карточку, если меню открыто */
+    }
 }
 
 /* Вернуть предыдущие обои из истории (ближайший существующий файл до курсора). */
@@ -3350,7 +3447,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             HGDIOBJ of = SelectObject(dc, g_set_font_title);
             SetTextColor(dc, cr_txt());
             RECT rt = { x, y, x + w, y + 26 };
-            DrawTextW(dc, L"GoodFon 2.7", -1, &rt, DT_LEFT | DT_SINGLELINE);
+            DrawTextW(dc, L"GoodFon 3.0", -1, &rt, DT_LEFT | DT_SINGLELINE);
             y += 34;
             /* описание с переносом по словам */
             SelectObject(dc, g_set_font);
@@ -4170,6 +4267,19 @@ static void show_menu(void)
         wcsncpy(g_card_name, PathFindFileNameW(g_current_image), 127); g_card_name[127] = 0;
         PathRemoveExtensionW(g_card_name);
         WCHAR wtheme[64]; utf8_to_wide(g_cfg.theme, wtheme, 64);
+        /* раздел картинки берём из её ссылки: …goodfon.com/<раздел>/wallpaper-… */
+        const char *sp = strstr(g_cur_page_url, "://");
+        sp = sp ? strchr(sp + 3, '/') : NULL;
+        if (sp && strstr(sp, "/wallpaper-")) {
+            char sl[64]; int k = 0; sp++;
+            while (*sp && *sp != '/' && k < 63) sl[k++] = *sp++;
+            sl[k] = 0;
+            const WCHAR *nm = NULL;
+            for (int i = 0; i < THEME_COUNT; i++)
+                if (!_stricmp(g_themes_all[i].slug, sl)) { nm = theme_name(i); break; }
+            if (nm) wcsncpy(wtheme, nm, 63); else utf8_to_wide(sl, wtheme, 64);
+            wtheme[63] = 0;
+        }
         _snwprintf(g_card_sub, 160, TW(L"тема: %s", L"theme: %s"), wtheme);
     } else {
         wcscpy(g_card_name, TW(L"Обои ещё не выбраны", L"No wallpaper yet"));
